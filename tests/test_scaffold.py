@@ -19,6 +19,6 @@ def test_help_exits_zero() -> None:
 
 
 def test_unimplemented_command(capsys: pytest.CaptureFixture[str]) -> None:
-    assert main(["serve"]) == 1
+    assert main(["backup"]) == 1
     captured = capsys.readouterr()
     assert "未实现" in captured.err

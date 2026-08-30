@@ -1,4 +1,4 @@
-"""CLI entry. Product commands are not implemented in this scaffold."""
+"""CLI entry. `serve` starts the loopback JSON API."""
 
 from __future__ import annotations
 
@@ -10,16 +10,22 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m local_planner",
         description="Local Planner — 本机个人日计划。",
-        epilog="serve 尚未实现。",
     )
+    parser.add_argument("command", nargs="*", help="子命令：serve")
     parser.add_argument(
-        "command",
-        nargs="*",
-        help="子命令（尚未实现）",
+        "--port",
+        type=int,
+        default=None,
+        help="覆盖 LOCAL_PLANNER_PORT（默认 8787）",
     )
     args = parser.parse_args(argv)
     if not args.command:
         parser.print_help()
+        return 0
+    if args.command[0] == "serve":
+        from local_planner.http.serve import serve
+
+        serve(port=args.port)
         return 0
     print("未实现", file=sys.stderr)
     return 1

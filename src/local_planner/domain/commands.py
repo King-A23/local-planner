@@ -282,9 +282,11 @@ def complete_errand(clock: Clock, uow: UnitOfWork, errand_id: ErrandId) -> DayPl
 
 
 def uncomplete_errand(clock: Clock, uow: UnitOfWork, errand_id: ErrandId) -> DayPlan:
-    errand = _errand_on_writable_day(clock, uow, errand_id)
+    errand = _require_errand(uow, errand_id)
     if errand.status == "expired":
+        # expired is irreversible even after the day is sealed
         raise Conflict("已作废的差事不能恢复")
+    require_writable_day(clock, uow, errand.day_date)
     if errand.status != "completed":
         raise Conflict("差事未勾选")
     uow.save_errand(replace(errand, status="open", completed_at=None))

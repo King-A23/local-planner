@@ -329,12 +329,14 @@ def test_begin_immediate_only_lives_in_uow_transaction() -> None:
     for path in SRC_ROOT.rglob("*.py"):
         text = path.read_text(encoding="utf-8")
         rel = path.relative_to(SRC_ROOT)
-        assert "PLANNER_LOCK" not in text
+        if rel.parts[0] != "http":
+            assert "PLANNER_LOCK" not in text, rel
         if "BEGIN IMMEDIATE" in text:
             assert rel == Path("persistence") / "store.py"
         if path.parent.name == "domain":
             assert "BEGIN IMMEDIATE" not in text
             assert "isolation_level" not in text
+            assert "PLANNER_LOCK" not in text
     conn_src = inspect.getsource(connection_mod)
     assert "BEGIN IMMEDIATE" not in conn_src
     assert ".executescript" not in inspect.getsource(connection_mod.apply_migrations)

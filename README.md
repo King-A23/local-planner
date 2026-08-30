@@ -37,9 +37,7 @@ pytest
 python -m local_planner --help
 ```
 
-当前 `python -m local_planner` 只打印帮助或「未实现」，不会起服务、不建表、不结转。
-
-后续启动形态（**尚未实现**）：
+当前 `python -m local_planner serve` 启动本机 JSON API（无 SPA）。
 
 ```bash
 python -m local_planner serve
@@ -47,4 +45,4 @@ python -m local_planner serve
 # 不要用 http://localhost:8787（macOS 可能走到 ::1，本进程不听 IPv6）
 ```
 
-开发数据目录是仓库内 `.data/`（已 gitignore）。进程只绑定 `127.0.0.1`。日历日固定 `Asia/Shanghai`。
+开发：`LOCAL_PLANNER_DEV=1` 时数据目录是仓库内 `.data/`（已 gitignore），并允许 Vite `5173` Origin。进程只绑定 `127.0.0.1`。日历日固定 `Asia/Shanghai`。
