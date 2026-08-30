@@ -1,15 +1,21 @@
 import { useEffect, useState, type FormEvent } from "react";
 
 import {
+  addErrandOnDay,
   addTodoOnDay,
+  completeErrand,
   completeTodo,
+  deleteErrand,
   deleteTask,
   errorMessage,
   isDayPlan,
   openDay,
+  renameErrand,
   renameTask,
+  uncompleteErrand,
   uncompleteTodo,
   type DayPlan,
+  type Errand,
   type Todo,
 } from "./api";
 import { formatDayHeading } from "./dates";
@@ -35,11 +41,30 @@ function addPlaceholder(plan: DayPlan): string {
   return "写下一条正经待办，回车即加入这一天";
 }
 
+function errandEmptyCopy(plan: DayPlan): string {
+  if (plan.isPast) {
+    return "这一天没有差事";
+  }
+  return "记下随手要办、当天作废的差事";
+}
+
+function errandPlaceholder(plan: DayPlan): string {
+  if (plan.isToday) {
+    return "写下一条零碎差事，回车即加入今天";
+  }
+  return "写下一条零碎差事，回车即加入这一天";
+}
+
+function isVoidedErrand(errand: Errand, writable: boolean): boolean {
+  return errand.status === "expired" || (!writable && errand.status !== "completed");
+}
+
 export function DayView({ date }: DayViewProps) {
   const [plan, setPlan] = useState<DayPlan | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState("");
+  const [errandDraft, setErrandDraft] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -147,6 +172,45 @@ export function DayView({ date }: DayViewProps) {
     });
   }
 
+  async function onAddErrand(event: FormEvent): Promise<void> {
+    event.preventDefault();
+    if (!plan?.writable) {
+      return;
+    }
+    const title = errandDraft.trim();
+    if (!title) {
+      return;
+    }
+    await apply(async () => {
+      const next = await addErrandOnDay(plan.date, title);
+      setErrandDraft("");
+      return next;
+    });
+  }
+
+  function onToggleErrand(errand: Errand): void {
+    if (!plan?.writable || isVoidedErrand(errand, plan.writable)) {
+      return;
+    }
+    void apply(() =>
+      errand.status === "completed"
+        ? uncompleteErrand(errand.id)
+        : completeErrand(errand.id),
+    );
+  }
+
+  function onRenameErrand(errand: Errand, title: string): void {
+    const nextTitle = title.trim();
+    if (!nextTitle || nextTitle === errand.title) {
+      return;
+    }
+    void apply(() => renameErrand(errand.id, nextTitle));
+  }
+
+  function onDeleteErrand(errand: Errand): void {
+    void apply(() => deleteErrand(errand.id));
+  }
+
   if (loading) {
     return (
       <main className="page">
@@ -197,6 +261,36 @@ export function DayView({ date }: DayViewProps) {
               onChange={(event) => setDraft(event.target.value)}
               placeholder={addPlaceholder(plan)}
               aria-label="新的正经待办"
+              maxLength={200}
+            />
+          </form>
+        ) : null}
+      </section>
+      <section className="column">
+        <h2>零碎差事</h2>
+        {plan.errands.length === 0 ? (
+          <p className="muted">{errandEmptyCopy(plan)}</p>
+        ) : (
+          <ul className="todos">
+            {plan.errands.map((errand) => (
+              <ErrandRow
+                key={errand.id}
+                errand={errand}
+                writable={plan.writable}
+                onToggle={onToggleErrand}
+                onRename={onRenameErrand}
+                onDelete={onDeleteErrand}
+              />
+            ))}
+          </ul>
+        )}
+        {plan.writable ? (
+          <form className="add-form" onSubmit={onAddErrand}>
+            <input
+              value={errandDraft}
+              onChange={(event) => setErrandDraft(event.target.value)}
+              placeholder={errandPlaceholder(plan)}
+              aria-label="新的零碎差事"
               maxLength={200}
             />
           </form>
@@ -284,6 +378,109 @@ function TodoRow({
       )}
       {writable ? (
         <button type="button" className="linkish" onClick={() => onDelete(todo)}>
+          删除
+        </button>
+      ) : null}
+    </li>
+  );
+}
+
+type ErrandRowProps = {
+  errand: Errand;
+  writable: boolean;
+  onToggle: (errand: Errand) => void;
+  onRename: (errand: Errand, title: string) => void;
+  onDelete: (errand: Errand) => void;
+};
+
+function ErrandRow({
+  errand,
+  writable,
+  onToggle,
+  onRename,
+  onDelete,
+}: ErrandRowProps) {
+  const voided = isVoidedErrand(errand, writable);
+  const [editing, setEditing] = useState(false);
+  const [title, setTitle] = useState(errand.title);
+
+  useEffect(() => {
+    setTitle(errand.title);
+  }, [errand.title]);
+
+  function finish(save: boolean): void {
+    if (!editing) {
+      return;
+    }
+    setEditing(false);
+    if (save) {
+      onRename(errand, title);
+    } else {
+      setTitle(errand.title);
+    }
+  }
+
+  const className =
+    errand.status === "completed"
+      ? "todo done"
+      : voided
+        ? "todo expired"
+        : "todo";
+
+  return (
+    <li className={className}>
+      {voided ? (
+        <span className="badge">已作废</span>
+      ) : (
+        <input
+          type="checkbox"
+          checked={errand.status === "completed"}
+          disabled={!writable}
+          onChange={() => onToggle(errand)}
+          aria-label={errand.title}
+        />
+      )}
+      {editing && writable && !voided ? (
+        <input
+          className="title-input"
+          value={title}
+          onChange={(event) => setTitle(event.target.value)}
+          onBlur={() => finish(true)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              finish(true);
+            }
+            if (event.key === "Escape") {
+              finish(false);
+            }
+          }}
+          maxLength={200}
+          aria-label="改标题"
+          autoFocus
+        />
+      ) : voided ? (
+        <span className="title">{errand.title}</span>
+      ) : (
+        <button
+          type="button"
+          className="title"
+          disabled={!writable}
+          onClick={() => {
+            if (writable) {
+              setEditing(true);
+            }
+          }}
+        >
+          {errand.title}
+        </button>
+      )}
+      {writable && !voided ? (
+        <button
+          type="button"
+          className="linkish"
+          onClick={() => onDelete(errand)}
+        >
           删除
         </button>
       ) : null}

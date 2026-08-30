@@ -114,6 +114,29 @@ def test_frontend_does_not_use_utc_date_strings() -> None:
         assert "new Date(" not in text, path
 
 
+def test_day_view_has_errand_column_not_on_inventory() -> None:
+    web = Path(__file__).resolve().parents[2] / "web"
+    src = web / "src"
+    api = (src / "api.ts").read_text(encoding="utf-8")
+    day_view = (src / "DayView.tsx").read_text(encoding="utf-8")
+    app = (src / "App.tsx").read_text(encoding="utf-8")
+    assert "零碎差事" in day_view
+    assert "已作废" in day_view
+    assert "addErrandOnDay" in day_view
+    assert "completeErrand" in day_view
+    assert "uncompleteErrand" in day_view
+    assert "renameErrand" in day_view
+    assert "deleteErrand" in day_view
+    assert "/api/days/${date}/errands" in api
+    assert "/api/errands/${errandId}/complete" in api
+    assert "reorderErrand" not in api
+    assert "/api/calendar" not in day_view
+    assert "ListInventory" not in day_view
+    assert "零碎差事" not in app
+    assert "errand" not in app.lower()
+    assert "未排期的正经待办将出现在这里" in app
+
+
 def _write_index(path: Path, body: str = "ok") -> Path:
     path.mkdir(parents=True, exist_ok=True)
     (path / "index.html").write_text(body, encoding="utf-8")

@@ -5,6 +5,15 @@ export type Todo = {
   sortOrder: number;
 };
 
+export type ErrandStatus = "open" | "completed" | "expired";
+
+export type Errand = {
+  id: string;
+  title: string;
+  status: ErrandStatus;
+  sortOrder: number;
+};
+
 export type DayPlan = {
   date: string;
   serverToday: string;
@@ -14,6 +23,7 @@ export type DayPlan = {
   writable: boolean;
   status: "open" | "sealed";
   todos: Todo[];
+  errands: Errand[];
 };
 
 export type Meta = {
@@ -76,6 +86,38 @@ export function addTodoOnDay(date: string, title: string): Promise<DayPlan> {
     method: "POST",
     body: JSON.stringify({ title }),
   }).then((r) => readJson<DayPlan>(r));
+}
+
+export function addErrandOnDay(date: string, title: string): Promise<DayPlan> {
+  return jsonRequest(`/api/days/${date}/errands`, {
+    method: "POST",
+    body: JSON.stringify({ title }),
+  }).then((r) => readJson<DayPlan>(r));
+}
+
+export function completeErrand(errandId: string): Promise<DayPlan> {
+  return jsonRequest(`/api/errands/${errandId}/complete`, {
+    method: "POST",
+  }).then((r) => readJson<DayPlan>(r));
+}
+
+export function uncompleteErrand(errandId: string): Promise<DayPlan> {
+  return jsonRequest(`/api/errands/${errandId}/uncomplete`, {
+    method: "POST",
+  }).then((r) => readJson<DayPlan>(r));
+}
+
+export function renameErrand(errandId: string, title: string): Promise<DayPlan> {
+  return jsonRequest(`/api/errands/${errandId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ title }),
+  }).then((r) => readJson<DayPlan>(r));
+}
+
+export function deleteErrand(errandId: string): Promise<DayPlan> {
+  return jsonRequest(`/api/errands/${errandId}`, { method: "DELETE" }).then((r) =>
+    readJson<DayPlan>(r),
+  );
 }
 
 export function completeTodo(date: string, taskId: string): Promise<DayPlan> {

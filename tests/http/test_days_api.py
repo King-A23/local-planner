@@ -62,6 +62,7 @@ def test_add_complete_errand_and_rename(client: TestClient) -> None:
     assert done.json()["errands"][0]["status"] == "completed"
     undone = client.post(f"/api/errands/{eid}/uncomplete")
     assert undone.json()["errands"][0]["status"] == "open"
+    assert client.get("/api/inventory").json()["items"] == []
 
 
 def test_reorder_todos_and_errands(client: TestClient) -> None:

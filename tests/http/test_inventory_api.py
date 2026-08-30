@@ -15,6 +15,25 @@ TODAY = "2026-08-30"
 FUTURE = "2026-08-31"
 
 
+def test_errand_never_appears_in_inventory(client: TestClient) -> None:
+    created = client.post(f"/api/days/{TODAY}/errands", json={"title": "打印材料"})
+    assert created.status_code == 200
+    eid = created.json()["errands"][0]["id"]
+    assert created.json()["errands"][0]["status"] == "open"
+    assert client.get("/api/inventory").json()["items"] == []
+    done = client.post(f"/api/errands/{eid}/complete")
+    assert done.json()["errands"][0]["status"] == "completed"
+    assert client.get("/api/inventory").json()["items"] == []
+    client.post(f"/api/errands/{eid}/uncomplete")
+    renamed = client.patch(f"/api/errands/{eid}", json={"title": "打印两份"})
+    assert renamed.json()["errands"][0]["title"] == "打印两份"
+    assert client.get("/api/inventory").json()["items"] == []
+    deleted = client.delete(f"/api/errands/{eid}")
+    assert deleted.status_code == 200
+    assert deleted.json()["errands"] == []
+    assert client.get("/api/inventory").json()["items"] == []
+
+
 def test_add_to_inventory_does_not_appear_on_today(client: TestClient) -> None:
     created = client.post("/api/inventory/tasks", json={"title": "竞赛报名"})
     assert created.status_code == 200

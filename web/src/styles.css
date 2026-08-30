@@ -94,6 +94,10 @@ body {
   padding: 0.9rem 1rem 1rem;
 }
 
+.column + .column {
+  margin-top: 1rem;
+}
+
 .todos {
   list-style: none;
   margin: 0;
@@ -109,6 +113,10 @@ body {
 
 .todo.done .title {
   text-decoration: line-through;
+  color: #6f6b63;
+}
+
+.todo.expired .title {
   color: #6f6b63;
 }
 
