@@ -6,6 +6,8 @@
 
 - 允许：产品文档、需求记录、开放问题、工作区脚手架
 - 禁止：应用代码、依赖安装、过早的技术选型落地
+- v1 范围以 `docs/product/v1-requirements.md` 和 `docs/product/decisions.md` 为准
+- 用户确认冻结稿之前，不进入设计文档或实现
 
 ## 文档位置
 

@@ -12,14 +12,16 @@
 | 阶段 | 状态 |
 | --- | --- |
 | 工作区 | 已建立 |
-| 产品需求 | 进行中 |
+| 产品需求 | v1 冻结稿已覆盖 D1–D14，待你点头冻结 |
 | 设计文档 | 未开始 |
 | 实现 | 未开始 |
 
+已确认决策见 [docs/product/decisions.md](docs/product/decisions.md)。
+
 ## 文档
 
-- [产品发现简报](docs/product/discovery-brief.md)
-- [已知背景](docs/product/known-context.md)
-- [待确认问题](docs/product/open-questions.md)
+- [v1 需求冻结稿](docs/product/v1-requirements.md) ← 当前产品范围以这份为准
+- [已确认决策](docs/product/decisions.md)
+- [产品文档索引](docs/product/README.md)
 
 工作名 `local-planner` 可在需求稳定后改名。
