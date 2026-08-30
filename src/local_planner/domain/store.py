@@ -54,7 +54,7 @@ class UnitOfWork(Protocol):
 
 
 class InMemoryUnitOfWork:
-    """Process-local store used until SQLite lands. Same port as persistence."""
+    """Process-local store for domain unit tests. Same port as persistence."""
 
     def __init__(self) -> None:
         self._tasks: dict[TaskId, Task] = {}
@@ -101,7 +101,7 @@ class InMemoryUnitOfWork:
         return found
 
     def save_entry(self, entry: DayTaskEntry) -> None:
-        self._reject_second_open_schedule(entry)
+        reject_second_open_schedule(self, entry)
         self._entries[(entry.day_date, entry.task_id)] = entry
 
     def delete_entry(self, day: CalendarDate, task_id: TaskId) -> None:
@@ -133,10 +133,12 @@ class InMemoryUnitOfWork:
         )
         return items
 
-    def _reject_second_open_schedule(self, entry: DayTaskEntry) -> None:
-        for existing in self.list_entries_for_task(entry.task_id):
-            if existing.day_date == entry.day_date:
-                continue
-            rec = self.get_day(existing.day_date)
-            if rec is None or rec.status == "open":
-                raise Conflict("同一任务不能同时排到两天")
+
+def reject_second_open_schedule(uow: UnitOfWork, entry: DayTaskEntry) -> None:
+    """One open-day projection at a time; sealed snapshots may remain."""
+    for existing in uow.list_entries_for_task(entry.task_id):
+        if existing.day_date == entry.day_date:
+            continue
+        rec = uow.get_day(existing.day_date)
+        if rec is None or rec.status == "open":
+            raise Conflict("同一任务不能同时排到两天")
