@@ -7,6 +7,7 @@ import os
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable
 
 from fastapi import FastAPI, Query, Request
@@ -32,6 +33,7 @@ from local_planner.domain.models import (
 )
 from local_planner.domain.settlement import ensure_settled, inclusive_range
 from local_planner.domain.store import UnitOfWork
+from local_planner.http.spa import mount_spa
 
 logger = logging.getLogger(__name__)
 
@@ -199,6 +201,7 @@ def create_app(
     uow: UnitOfWork,
     port: int = DEFAULT_PORT,
     dev: bool | None = None,
+    dist_dir: Path | None = None,
 ) -> FastAPI:
     if dev is None:
         dev = os.environ.get("LOCAL_PLANNER_DEV") == "1"
@@ -470,5 +473,8 @@ def create_app(
                 today,
             ),
         )
+
+    if dist_dir is not None:
+        mount_spa(app, dist_dir)
 
     return app

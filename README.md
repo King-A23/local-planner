@@ -37,12 +37,15 @@ pytest
 python -m local_planner --help
 ```
 
-当前 `python -m local_planner serve` 启动本机 JSON API（无 SPA）。
+生产 `serve` 同时提供 JSON API 与 `web/dist` SPA。先构建前端：
 
 ```bash
+cd web && npm ci && npm run build && cd ..
 python -m local_planner serve
 # 只打开启动日志里的 http://127.0.0.1:8787
 # 不要用 http://localhost:8787（macOS 可能走到 ::1，本进程不听 IPv6）
 ```
 
-开发：`LOCAL_PLANNER_DEV=1` 时数据目录是仓库内 `.data/`（已 gitignore），并允许 Vite `5173` Origin。进程只绑定 `127.0.0.1`。日历日固定 `Asia/Shanghai`。
+缺 `web/dist/index.html` 时生产 `serve` 拒绝启动，并提示 `run npm run build`。
+
+开发：`LOCAL_PLANNER_DEV=1 python -m local_planner serve` 可无 dist（只开 API）；另终 `cd web && npm i && npm run dev`，Vite 把 `/api` 代理到 `8787`。`LOCAL_PLANNER_DEV=1` 时数据目录是仓库内 `.data/`（已 gitignore），并允许 Vite `5173` Origin。进程只绑定 `127.0.0.1`。日历日固定 `Asia/Shanghai`。

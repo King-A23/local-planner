@@ -5,6 +5,7 @@ from __future__ import annotations
 import inspect
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from local_planner.clock import FrozenClock, SystemClock
@@ -36,9 +37,21 @@ def test_uvicorn_binds_loopback_single_worker() -> None:
     assert "localhost" not in serve_src
 
 
+def _fake_dist(tmp_path: Path) -> Path:
+    dist = tmp_path / "dist"
+    dist.mkdir(exist_ok=True)
+    (dist / "index.html").write_text(
+        '<!doctype html><div id="root"></div>', encoding="utf-8"
+    )
+    return dist
+
+
 def test_serve_passes_loopback_kwargs(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("LOCAL_PLANNER_DATA_DIR", str(tmp_path))
     monkeypatch.delenv("LOCAL_PLANNER_DEV", raising=False)
+    monkeypatch.setattr(
+        "local_planner.http.serve.resolve_web_dist", lambda: _fake_dist(tmp_path)
+    )
     seen: dict = {}
 
     def fake_run(app, **kwargs):
@@ -51,6 +64,11 @@ def test_serve_passes_loopback_kwargs(monkeypatch, tmp_path: Path) -> None:
     assert seen["workers"] == 1
     assert seen["reload"] is False
     assert seen["port"] == 8787
+    with TestClient(seen["_app"], base_url="http://127.0.0.1:8787") as client:
+        page = client.get("/inventory")
+        assert page.status_code == 200
+        assert "text/html" in page.headers.get("content-type", "")
+        assert 'id="root"' in page.text
 
 
 def _client(app) -> TestClient:
@@ -166,9 +184,44 @@ def test_api_routes_are_sync_def(app) -> None:
             assert not inspect.iscoroutinefunction(endpoint), path
 
 
-def test_non_api_get_may_404(client: TestClient) -> None:
-    response = client.get("/inventory")
+def test_unknown_api_is_json_404(client: TestClient) -> None:
+    response = client.get("/api/does-not-exist")
     assert response.status_code == 404
+    body = response.json()
+    assert body["error"] == "NotFound"
+    assert "application/json" in response.headers.get("content-type", "")
+
+
+def test_serve_production_missing_dist_exits(
+    monkeypatch, tmp_path: Path, capsys
+) -> None:
+    monkeypatch.setenv("LOCAL_PLANNER_DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("LOCAL_PLANNER_DEV", raising=False)
+    monkeypatch.setattr("local_planner.http.serve.resolve_web_dist", lambda: None)
+    monkeypatch.setattr("local_planner.http.serve.uvicorn.run", lambda *a, **k: None)
+    with pytest.raises(SystemExit) as excinfo:
+        serve()
+    assert excinfo.value.code == 1
+    assert "npm run build" in capsys.readouterr().err
+
+
+def test_serve_dev_without_dist_starts_api(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("LOCAL_PLANNER_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("LOCAL_PLANNER_DEV", "1")
+    monkeypatch.setattr("local_planner.http.serve.resolve_web_dist", lambda: None)
+    seen: dict = {}
+
+    def fake_run(app, **kwargs):
+        seen.update(kwargs)
+        seen["_app"] = app
+
+    monkeypatch.setattr("local_planner.http.serve.uvicorn.run", fake_run)
+    serve()
+    assert seen["host"] == "127.0.0.1"
+    with TestClient(seen["_app"], base_url="http://127.0.0.1:8787") as client:
+        response = client.get("/inventory")
+        assert response.status_code == 404
+        assert response.json()["error"] == "NotFound"
 
 
 def test_clock_override_requires_allow_flag(monkeypatch) -> None:

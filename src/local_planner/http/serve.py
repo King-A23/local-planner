@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 import threading
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from local_planner.clock import Clock, FrozenClock, SystemClock
 from local_planner.domain.settlement import ensure_settled
 from local_planner.domain.store import UnitOfWork
 from local_planner.http.app import DEFAULT_PORT, PLANNER_LOCK, create_app
+from local_planner.http.spa import resolve_web_dist
 from local_planner.persistence import SqliteUnitOfWork
 
 logger = logging.getLogger(__name__)
@@ -101,17 +103,24 @@ def serve(port: int | None = None) -> None:
     clock = resolve_clock()
     path = db_path()
     uow = SqliteUnitOfWork.open(path)
-    app = create_app(
-        clock=clock,
-        uow=uow,
-        port=port,
-        dev=os.environ.get("LOCAL_PLANNER_DEV") == "1",
-    )
+    dev = os.environ.get("LOCAL_PLANNER_DEV") == "1"
     with PLANNER_LOCK:
         with uow.transaction():
             ensure_settled(clock, uow)
             today = clock.today()
             last = uow.meta.get("last_settled_date")
+    dist = resolve_web_dist()
+    if dist is None and not dev:
+        print("Missing web/dist/index.html; run npm run build", file=sys.stderr)
+        uow.close()
+        raise SystemExit(1)
+    app = create_app(
+        clock=clock,
+        uow=uow,
+        port=port,
+        dev=dev,
+        dist_dir=dist,
+    )
     logger.info(
         "startup data_dir=%s db=%s today=%s last_settled=%s",
         data_dir(),

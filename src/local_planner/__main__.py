@@ -1,4 +1,4 @@
-"""CLI entry. `serve` starts the loopback JSON API."""
+"""CLI entry. `serve` starts the loopback JSON API and SPA."""
 
 from __future__ import annotations
 
