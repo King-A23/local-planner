@@ -1,8 +1,9 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import {
   addErrandOnDay,
   addTodoOnDay,
+  ApiError,
   completeErrand,
   completeTodo,
   deleteErrand,
@@ -18,10 +19,12 @@ import {
   type Errand,
   type Todo,
 } from "./api";
-import { formatDayHeading } from "./dates";
+import { addCivilDays, formatDayHeading } from "./dates";
+import { handleNavClick } from "./route";
 
 type DayViewProps = {
   date: string;
+  serverToday?: string;
 };
 
 function emptyCopy(plan: DayPlan): string {
@@ -59,16 +62,22 @@ function isVoidedErrand(errand: Errand, writable: boolean): boolean {
   return errand.status === "expired" || (!writable && errand.status !== "completed");
 }
 
-export function DayView({ date }: DayViewProps) {
+export function DayView({ date, serverToday }: DayViewProps) {
   const [plan, setPlan] = useState<DayPlan | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState("");
   const [errandDraft, setErrandDraft] = useState("");
+  const planRef = useRef(plan);
+  planRef.current = plan;
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
+    const current = planRef.current;
+    const silent = current !== null && current.date === date;
+    if (!silent) {
+      setLoading(true);
+    }
     openDay(date)
       .then((next) => {
         if (!cancelled) {
@@ -90,7 +99,7 @@ export function DayView({ date }: DayViewProps) {
     return () => {
       cancelled = true;
     };
-  }, [date]);
+  }, [date, serverToday]);
 
   async function apply(
     work: () => Promise<DayPlan | void>,
@@ -103,6 +112,14 @@ export function DayView({ date }: DayViewProps) {
       setError(null);
     } catch (err: unknown) {
       setError(errorMessage(err));
+      if (err instanceof ApiError && err.error === "DaySealed") {
+        try {
+          const sealed = await openDay(date);
+          setPlan(sealed);
+        } catch {
+          // keep DaySealed message from the write
+        }
+      }
     }
   }
 
@@ -134,6 +151,9 @@ export function DayView({ date }: DayViewProps) {
   }
 
   function onRename(todo: Todo, title: string): void {
+    if (!plan?.writable) {
+      return;
+    }
     const nextTitle = title.trim();
     if (!nextTitle || nextTitle === todo.title) {
       return;
@@ -159,6 +179,9 @@ export function DayView({ date }: DayViewProps) {
   }
 
   function onDelete(todo: Todo): void {
+    if (!plan?.writable) {
+      return;
+    }
     void apply(async () => {
       await deleteTask(todo.taskId);
       setPlan((current) =>
@@ -200,6 +223,9 @@ export function DayView({ date }: DayViewProps) {
   }
 
   function onRenameErrand(errand: Errand, title: string): void {
+    if (!plan?.writable) {
+      return;
+    }
     const nextTitle = title.trim();
     if (!nextTitle || nextTitle === errand.title) {
       return;
@@ -208,6 +234,9 @@ export function DayView({ date }: DayViewProps) {
   }
 
   function onDeleteErrand(errand: Errand): void {
+    if (!plan?.writable) {
+      return;
+    }
     void apply(() => deleteErrand(errand.id));
   }
 
@@ -227,14 +256,38 @@ export function DayView({ date }: DayViewProps) {
     );
   }
 
+  const prev = addCivilDays(plan.date, -1);
+  const next = addCivilDays(plan.date, 1);
+
   return (
-    <main className="page">
-      <h1 className="day-heading">
-        <span>{formatDayHeading(plan.date)}</span>
-        {plan.isToday ? <span className="badge">今天</span> : null}
-        {plan.isPast ? <span className="badge">只读</span> : null}
-        {plan.isFuture ? <span className="badge">未来</span> : null}
-      </h1>
+    <main className={plan.writable ? "page" : "page readonly"}>
+      <div className="day-nav">
+        <a
+          className="day-arrow"
+          href={`/d/${prev}`}
+          aria-label="上一天"
+          onClick={(event) => handleNavClick(event, `/d/${prev}`)}
+        >
+          ←
+        </a>
+        <h1 className="day-heading">
+          <span>{formatDayHeading(plan.date)}</span>
+          {plan.isToday ? <span className="badge">今天</span> : null}
+          {plan.isPast ? <span className="badge">只读</span> : null}
+          {plan.isFuture ? <span className="badge">未来</span> : null}
+        </h1>
+        <a
+          className="day-arrow"
+          href={`/d/${next}`}
+          aria-label="下一天"
+          onClick={(event) => handleNavClick(event, `/d/${next}`)}
+        >
+          →
+        </a>
+      </div>
+      {!plan.writable ? (
+        <p className="sealed">这一天已封印，不能改</p>
+      ) : null}
       {error ? <p className="error">{error}</p> : null}
       <section className="column">
         <h2>正经待办</h2>

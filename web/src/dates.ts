@@ -51,13 +51,99 @@ function weekdaySun0(year: number, month: number, day: number): number {
   );
 }
 
-export function formatDayHeading(iso: string): string {
+export type CivilParts = {
+  year: number;
+  month: number;
+  day: number;
+};
+
+export function parseCivil(iso: string): CivilParts | null {
   const match = DATE_RE.exec(iso);
   if (!match) {
-    return iso;
+    return null;
   }
   const year = Number(match[1]);
   const month = Number(match[2]);
   const day = Number(match[3]);
+  if (month < 1 || month > 12 || day < 1 || day > daysInMonth(year, month)) {
+    return null;
+  }
+  return { year, month, day };
+}
+
+function pad2(n: number): string {
+  return n < 10 ? `0${n}` : String(n);
+}
+
+export function formatCivil(year: number, month: number, day: number): string {
+  return `${String(year).padStart(4, "0")}-${pad2(month)}-${pad2(day)}`;
+}
+
+/** Civil-day ±n via Y-M-D parts. Never string-slice the day field. */
+export function addCivilDays(iso: string, delta: number): string {
+  const parts = parseCivil(iso);
+  if (!parts) {
+    return iso;
+  }
+  let { year, month, day } = parts;
+  const step = delta >= 0 ? 1 : -1;
+  let left = Math.abs(delta);
+  while (left > 0) {
+    day += step;
+    if (day < 1) {
+      month -= 1;
+      if (month < 1) {
+        month = 12;
+        year -= 1;
+      }
+      day = daysInMonth(year, month);
+    } else {
+      const dim = daysInMonth(year, month);
+      if (day > dim) {
+        day = 1;
+        month += 1;
+        if (month > 12) {
+          month = 1;
+          year += 1;
+        }
+      }
+    }
+    left -= 1;
+  }
+  return formatCivil(year, month, day);
+}
+
+export function addCivilMonths(
+  year: number,
+  month: number,
+  delta: number,
+): { year: number; month: number } {
+  const idx = year * 12 + (month - 1) + delta;
+  const nextYear = Math.floor(idx / 12);
+  return { year: nextYear, month: idx - nextYear * 12 + 1 };
+}
+
+export const WEEKDAY_LABELS_MON_FIRST = ["一", "二", "三", "四", "五", "六", "日"];
+
+/** Monday-first 6×7 grid. Adjacent-month cells included so dots can render. */
+export function monthGrid(year: number, month: number): string[] {
+  const first = formatCivil(year, month, 1);
+  const sun0 = weekdaySun0(year, month, 1);
+  const monday0 = (sun0 + 6) % 7;
+  const cells: string[] = [];
+  let cursor = addCivilDays(first, -monday0);
+  for (let i = 0; i < 42; i += 1) {
+    cells.push(cursor);
+    cursor = addCivilDays(cursor, 1);
+  }
+  return cells;
+}
+
+export function formatDayHeading(iso: string): string {
+  const parts = parseCivil(iso);
+  if (!parts) {
+    return iso;
+  }
+  const { year, month, day } = parts;
   return `${year}年${month}月${day}日 ${WEEKDAYS[weekdaySun0(year, month, day)]}`;
 }

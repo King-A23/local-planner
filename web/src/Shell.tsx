@@ -1,14 +1,24 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 
+import { MonthCalendar } from "./Calendar";
 import { DISPLAY_NAME } from "./constants";
 import { handleNavClick } from "./route";
 
 type ShellProps = {
   children: ReactNode;
   inventoryCount?: number;
+  today?: string;
+  viewedDate?: string;
 };
 
-export function Shell({ children, inventoryCount }: ShellProps) {
+export function Shell({
+  children,
+  inventoryCount,
+  today,
+  viewedDate,
+}: ShellProps) {
+  const [calOpen, setCalOpen] = useState(false);
+
   return (
     <div className="app">
       <header className="shell">
@@ -25,9 +35,23 @@ export function Shell({ children, inventoryCount }: ShellProps) {
               <span className="badge count">{inventoryCount}</span>
             ) : null}
           </a>
-          <span className="nav-stub" title="月历将在后续版本提供">
+          <button
+            type="button"
+            className="nav-cal"
+            aria-expanded={calOpen}
+            aria-haspopup="dialog"
+            disabled={!today}
+            onClick={() => setCalOpen((open) => !open)}
+          >
             日期
-          </span>
+          </button>
+          {calOpen && today ? (
+            <MonthCalendar
+              today={today}
+              viewedDate={viewedDate}
+              onClose={() => setCalOpen(false)}
+            />
+          ) : null}
         </nav>
       </header>
       {children}

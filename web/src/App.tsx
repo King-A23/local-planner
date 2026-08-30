@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { errorMessage, getMeta, type Meta } from "./api";
+import { META_POLL_MS } from "./constants";
 import { DayView } from "./DayView";
 import { handleNavClick, parseRoute } from "./route";
 import { Shell } from "./Shell";
@@ -23,22 +24,36 @@ export function App() {
 
   useEffect(() => {
     let cancelled = false;
-    getMeta()
-      .then((next) => {
-        if (!cancelled) {
-          setMeta(next);
-          setMetaError(null);
-        }
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) {
-          setMetaError(errorMessage(err));
-        }
-      });
+    function refresh() {
+      getMeta()
+        .then((next) => {
+          if (!cancelled) {
+            setMeta(next);
+            setMetaError(null);
+          }
+        })
+        .catch((err: unknown) => {
+          if (!cancelled) {
+            setMetaError(errorMessage(err));
+          }
+        });
+    }
+    refresh();
+    // §6.6: poll updates meta.today only. `/` re-opens the new today;
+    // a parked `/d/昨天` stays on that URL and DayView re-reads OpenDay.
+    const id = window.setInterval(refresh, META_POLL_MS);
     return () => {
       cancelled = true;
+      window.clearInterval(id);
     };
   }, []);
+
+  const viewedDate =
+    route.kind === "day"
+      ? route.date
+      : route.kind === "today"
+        ? meta?.today
+        : undefined;
 
   let body;
   if (route.kind === "inventory") {
@@ -73,11 +88,19 @@ export function App() {
         </main>
       );
     } else {
-      body = <DayView date={meta.today} />;
+      body = <DayView date={meta.today} serverToday={meta.today} />;
     }
   } else {
-    body = <DayView date={route.date} />;
+    body = <DayView date={route.date} serverToday={meta?.today} />;
   }
 
-  return <Shell inventoryCount={meta?.inventoryCount}>{body}</Shell>;
+  return (
+    <Shell
+      inventoryCount={meta?.inventoryCount}
+      today={meta?.today}
+      viewedDate={viewedDate}
+    >
+      {body}
+    </Shell>
+  );
 }

@@ -73,8 +73,24 @@ function jsonRequest(url: string, init: RequestInit): Promise<Response> {
   return fetch(url, { ...init, headers: { ...JSON_HEADERS, ...init.headers } });
 }
 
+export type CalendarDayCount = {
+  date: string;
+  todoCount: number;
+  errandCount: number;
+};
+
+export type Calendar = {
+  today: string;
+  days: CalendarDayCount[];
+};
+
 export function getMeta(): Promise<Meta> {
   return fetch("/api/meta").then((r) => readJson<Meta>(r));
+}
+
+export function getCalendar(from: string, to: string): Promise<Calendar> {
+  const params = new URLSearchParams({ from, to });
+  return fetch(`/api/calendar?${params}`).then((r) => readJson<Calendar>(r));
 }
 
 export function openDay(date: string): Promise<DayPlan> {

@@ -137,6 +137,57 @@ def test_day_view_has_errand_column_not_on_inventory() -> None:
     assert "未排期的正经待办将出现在这里" in app
 
 
+def test_date_nav_calendar_readonly_and_midnight_poll() -> None:
+    web = Path(__file__).resolve().parents[2] / "web"
+    src = web / "src"
+    dates = (src / "dates.ts").read_text(encoding="utf-8")
+    api = (src / "api.ts").read_text(encoding="utf-8")
+    app = (src / "App.tsx").read_text(encoding="utf-8")
+    shell = (src / "Shell.tsx").read_text(encoding="utf-8")
+    day_view = (src / "DayView.tsx").read_text(encoding="utf-8")
+    calendar = (src / "Calendar.tsx").read_text(encoding="utf-8")
+    constants = (src / "constants.ts").read_text(encoding="utf-8")
+
+    assert "export function addCivilDays" in dates
+    assert "daysInMonth" in dates
+    assert "new Date" not in dates
+    assert "slice(" not in dates
+
+    assert "getCalendar" in api
+    assert "/api/calendar?" in api
+    assert "todoCount" in api
+    assert "errandCount" in api
+
+    assert "addCivilDays(plan.date, -1)" in day_view
+    assert "addCivilDays(plan.date, 1)" in day_view
+    assert 'aria-label="上一天"' in day_view
+    assert 'aria-label="下一天"' in day_view
+    assert "DaySealed" in day_view
+    assert "这一天已封印，不能改" in day_view
+    assert "page readonly" in day_view
+    assert "[date, serverToday]" in day_view
+    assert "/api/calendar" not in day_view
+    assert "ListInventory" not in day_view
+    assert "从库存添加" not in day_view
+
+    assert "META_POLL_MS = 30_000" in constants
+    assert "setInterval" in app
+    assert "META_POLL_MS" in app
+    assert "getMeta" in app
+    assert "navigate(" not in app
+    assert "history.pushState" not in app
+    assert "history.replaceState" not in app
+    assert "serverToday={meta?.today}" in app
+    assert "serverToday={meta.today}" in app
+
+    assert "MonthCalendar" in shell
+    assert 'handleNavClick(e, "/")' in shell
+    assert "todoCount + day.errandCount > 0" in calendar
+    assert "navigate(`/d/${date}`)" in calendar
+    assert 'navigate("/")' in calendar
+    assert "getCalendar(from, to)" in calendar
+
+
 def _write_index(path: Path, body: str = "ok") -> Path:
     path.mkdir(parents=True, exist_ok=True)
     (path / "index.html").write_text(body, encoding="utf-8")
