@@ -12,15 +12,16 @@
 | 阶段 | 状态 |
 | --- | --- |
 | 工作区 | 已建立 |
-| 产品需求 | v1 冻结稿已覆盖 D1–D14，待你点头冻结 |
-| 设计文档 | 未开始 |
+| 产品需求 | 已冻结（D1–D14） |
+| 设计文档 | 已通过审查（0 open issues） |
 | 实现 | 未开始 |
 
 已确认决策见 [docs/product/decisions.md](docs/product/decisions.md)。
 
 ## 文档
 
-- [v1 需求冻结稿](docs/product/v1-requirements.md) ← 当前产品范围以这份为准
+- [v1 需求冻结稿](docs/product/v1-requirements.md) ← 产品范围以这份为准
+- [v1 技术设计](docs/design/v1-design.md) ← 实现以这份为准
 - [已确认决策](docs/product/decisions.md)
 - [产品文档索引](docs/product/README.md)
 
