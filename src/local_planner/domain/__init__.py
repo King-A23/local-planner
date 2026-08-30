@@ -19,6 +19,7 @@ from local_planner.domain.models import (
     task_status,
 )
 from local_planner.domain.seal import seal_day, settle_one_day
+from local_planner.domain.settlement import ensure_settled
 from local_planner.domain.store import InMemoryUnitOfWork, UnitOfWork
 
 __all__ = [
@@ -28,6 +29,7 @@ __all__ = [
     "DaySealed",
     "DayTaskEntry",
     "DomainError",
+    "ensure_settled",
     "Errand",
     "InMemoryUnitOfWork",
     "InventoryItem",

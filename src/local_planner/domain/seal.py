@@ -1,4 +1,4 @@
-"""seal_day / settle_one_day. Watermark ensure_settled is a later PR."""
+"""seal_day / settle_one_day. Watermark ensure_settled lives in settlement."""
 
 from __future__ import annotations
 

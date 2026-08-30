@@ -17,8 +17,16 @@ from local_planner.domain.models import (
 )
 
 
+class MetaStore(Protocol):
+    def get(self, key: str) -> str | None: ...
+
+    def set(self, key: str, value: str) -> None: ...
+
+
 class UnitOfWork(Protocol):
     """Persistence port. Domain never BEGIN/COMMIT; the adapter owns that."""
+
+    meta: MetaStore
 
     def transaction(self) -> Iterator[None]: ...
 
@@ -52,6 +60,21 @@ class UnitOfWork(Protocol):
 
     def list_inventory_tasks(self) -> list[Task]: ...
 
+    def is_proven_empty(self) -> bool: ...
+
+    def earliest_relevant_date(self) -> CalendarDate | None: ...
+
+
+class InMemoryMeta:
+    def __init__(self) -> None:
+        self._values: dict[str, str] = {}
+
+    def get(self, key: str) -> str | None:
+        return self._values.get(key)
+
+    def set(self, key: str, value: str) -> None:
+        self._values[key] = value
+
 
 class InMemoryUnitOfWork:
     """Process-local store for domain unit tests. Same port as persistence."""
@@ -63,6 +86,7 @@ class InMemoryUnitOfWork:
         self._errands: dict[ErrandId, Errand] = {}
         self._task_seq = 0
         self._task_order: dict[TaskId, int] = {}
+        self.meta = InMemoryMeta()
 
     @contextmanager
     def transaction(self) -> Iterator[None]:
@@ -132,6 +156,21 @@ class InMemoryUnitOfWork:
             reverse=True,
         )
         return items
+
+    def is_proven_empty(self) -> bool:
+        return not self._days and not self._entries and not self._errands
+
+    def earliest_relevant_date(self) -> CalendarDate | None:
+        dates: list[CalendarDate] = []
+        dates.extend(self._days)
+        dates.extend(day for day, _ in self._entries)
+        dates.extend(errand.day_date for errand in self._errands.values())
+        dates.extend(
+            task.current_scheduled_date
+            for task in self._tasks.values()
+            if task.current_scheduled_date is not None
+        )
+        return min(dates) if dates else None
 
 
 def reject_second_open_schedule(uow: UnitOfWork, entry: DayTaskEntry) -> None:

@@ -20,11 +20,33 @@ from local_planner.domain.store import reject_second_open_schedule
 from local_planner.persistence.connection import open_connection
 
 
+class SqliteMeta:
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._conn = conn
+
+    def get(self, key: str) -> str | None:
+        row = self._conn.execute(
+            "SELECT value FROM meta WHERE key = ?",
+            (key,),
+        ).fetchone()
+        return None if row is None else row["value"]
+
+    def set(self, key: str, value: str) -> None:
+        self._conn.execute(
+            """
+            INSERT INTO meta (key, value) VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """,
+            (key, value),
+        )
+
+
 class SqliteUnitOfWork:
     """File-backed store implementing the domain UnitOfWork port."""
 
     def __init__(self, conn: sqlite3.Connection) -> None:
         self.conn = conn
+        self.meta = SqliteMeta(conn)
 
     @classmethod
     def open(cls, path: str | Path) -> SqliteUnitOfWork:
@@ -201,6 +223,32 @@ class SqliteUnitOfWork:
             """
         ).fetchall()
         return [_task_from_row(row) for row in rows]
+
+    def is_proven_empty(self) -> bool:
+        for table in ("days", "day_task_entries", "errands"):
+            row = self.conn.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone()
+            if row is not None:
+                return False
+        return True
+
+    def earliest_relevant_date(self) -> CalendarDate | None:
+        row = self.conn.execute(
+            """
+            SELECT MIN(d) FROM (
+              SELECT date AS d FROM days
+              UNION ALL
+              SELECT day_date FROM day_task_entries
+              UNION ALL
+              SELECT day_date FROM errands
+              UNION ALL
+              SELECT current_scheduled_date FROM tasks
+              WHERE current_scheduled_date IS NOT NULL
+            )
+            """
+        ).fetchone()
+        if row is None or row[0] is None:
+            return None
+        return row[0]
 
 
 def _task_from_row(row: sqlite3.Row) -> Task:
