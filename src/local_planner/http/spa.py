@@ -12,19 +12,36 @@ CSP = "default-src 'self'"
 _API_404 = {"error": "NotFound", "message": "找不到该资源"}
 
 
-def resolve_web_dist() -> Path | None:
-    """Prefer a nearby web/dist (repo tree or packaged next to the package)."""
+def web_dist_candidates(here: Path) -> list[Path]:
+    """Package-local dist, then repo dist next to pyproject.toml. Never walk to /."""
+    here = here.resolve()
     seen: set[Path] = set()
-    here = Path(__file__).resolve()
-    for parent in [here.parent, *here.parents]:
-        candidate = parent / "web" / "dist"
+    out: list[Path] = []
+
+    def add(candidate: Path) -> None:
         try:
             key = candidate.resolve()
         except OSError:
-            continue
+            key = candidate
         if key in seen:
-            continue
+            return
         seen.add(key)
+        out.append(candidate)
+
+    if len(here.parents) >= 2:
+        # src/local_planner/http/spa.py → local_planner/web/dist (packaged data)
+        add(here.parents[1] / "web" / "dist")
+    for parent in here.parents:
+        if (parent / "pyproject.toml").is_file():
+            add(parent / "web" / "dist")
+            break
+    return out
+
+
+def resolve_web_dist(*, here: Path | None = None) -> Path | None:
+    """Prefer packaged dist, else the repo web/dist beside pyproject.toml."""
+    start = here if here is not None else Path(__file__)
+    for candidate in web_dist_candidates(start):
         if (candidate / "index.html").is_file():
             return candidate
     return None

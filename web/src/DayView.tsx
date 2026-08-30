@@ -28,6 +28,13 @@ function emptyCopy(plan: DayPlan): string {
   return "这一天没有记录";
 }
 
+function addPlaceholder(plan: DayPlan): string {
+  if (plan.isToday) {
+    return "写下一条正经待办，回车即加入今天";
+  }
+  return "写下一条正经待办，回车即加入这一天";
+}
+
 export function DayView({ date }: DayViewProps) {
   const [plan, setPlan] = useState<DayPlan | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -188,7 +195,7 @@ export function DayView({ date }: DayViewProps) {
             <input
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
-              placeholder="写下一条正经待办，回车即加入今天"
+              placeholder={addPlaceholder(plan)}
               aria-label="新的正经待办"
               maxLength={200}
             />

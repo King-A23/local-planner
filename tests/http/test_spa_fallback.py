@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from local_planner.clock import FrozenClock
 from local_planner.http.app import create_app
+from local_planner.http.spa import resolve_web_dist, web_dist_candidates
 from local_planner.persistence import SqliteUnitOfWork
 
 INDEX = "<!doctype html><html><body><div id=\"root\"></div></body></html>"
@@ -94,12 +95,72 @@ def test_spa_does_not_leak_outside_dist(spa_client: TestClient) -> None:
 
 
 def test_frontend_does_not_use_utc_date_strings() -> None:
-    root = Path(__file__).resolve().parents[2] / "web" / "src"
-    constants = (root / "constants.ts").read_text(encoding="utf-8")
+    web = Path(__file__).resolve().parents[2] / "web"
+    src = web / "src"
+    constants = (src / "constants.ts").read_text(encoding="utf-8")
     assert 'DISPLAY_NAME = "Local Planner"' in constants
-    files = list(root.rglob("*.ts")) + list(root.rglob("*.tsx"))
+    assert "Local Planner" not in (web / "index.html").read_text(encoding="utf-8")
+    vite = (web / "vite.config.ts").read_text(encoding="utf-8")
+    assert "src/constants.ts" in vite
+    assert "transformIndexHtml" in vite
+    day_view = (src / "DayView.tsx").read_text(encoding="utf-8")
+    assert "回车即加入今天" in day_view
+    assert "回车即加入这一天" in day_view
+    files = list(src.rglob("*.ts")) + list(src.rglob("*.tsx"))
     assert files
     for path in files:
         text = path.read_text(encoding="utf-8")
         assert "new Date()" not in text, path
         assert "new Date(" not in text, path
+
+
+def _write_index(path: Path, body: str = "ok") -> Path:
+    path.mkdir(parents=True, exist_ok=True)
+    (path / "index.html").write_text(body, encoding="utf-8")
+    return path
+
+
+def test_web_dist_stops_at_pyproject_and_ignores_strays(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    here = repo / "src" / "local_planner" / "http" / "spa.py"
+    here.parent.mkdir(parents=True)
+    here.write_text("", encoding="utf-8")
+    (repo / "pyproject.toml").write_text("[project]\nname = 'x'\n", encoding="utf-8")
+    good = _write_index(repo / "web" / "dist", "repo")
+    stray = _write_index(tmp_path / "web" / "dist", "stray")
+
+    candidates = [p.resolve() for p in web_dist_candidates(here)]
+    assert good.resolve() in candidates
+    assert stray.resolve() not in candidates
+    found = resolve_web_dist(here=here)
+    assert found is not None
+    assert found.resolve() == good.resolve()
+    assert (found / "index.html").read_text(encoding="utf-8") == "repo"
+
+
+def test_web_dist_missing_repo_copy_does_not_use_ancestor_stray(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    here = repo / "src" / "local_planner" / "http" / "spa.py"
+    here.parent.mkdir(parents=True)
+    here.write_text("", encoding="utf-8")
+    (repo / "pyproject.toml").write_text("[project]\nname = 'x'\n", encoding="utf-8")
+    _write_index(tmp_path / "web" / "dist", "stray")
+    assert resolve_web_dist(here=here) is None
+
+
+def test_web_dist_packaged_next_to_package_without_pyproject(
+    tmp_path: Path,
+) -> None:
+    here = tmp_path / "site-packages" / "local_planner" / "http" / "spa.py"
+    here.parent.mkdir(parents=True)
+    here.write_text("", encoding="utf-8")
+    packaged = _write_index(
+        tmp_path / "site-packages" / "local_planner" / "web" / "dist", "pkg"
+    )
+    _write_index(tmp_path / "web" / "dist", "stray")
+    found = resolve_web_dist(here=here)
+    assert found is not None
+    assert found.resolve() == packaged.resolve()
+    assert (found / "index.html").read_text(encoding="utf-8") == "pkg"
