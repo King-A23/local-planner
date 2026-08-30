@@ -192,6 +192,23 @@ export function unscheduleTask(taskId: string): Promise<InventoryItem> {
   }).then((r) => readJson<InventoryItem>(r));
 }
 
+export function reorderTodos(date: string, taskIds: string[]): Promise<DayPlan> {
+  return jsonRequest(`/api/days/${date}/todos/order`, {
+    method: "PUT",
+    body: JSON.stringify({ taskIds }),
+  }).then((r) => readJson<DayPlan>(r));
+}
+
+export function reorderErrands(
+  date: string,
+  errandIds: string[],
+): Promise<DayPlan> {
+  return jsonRequest(`/api/days/${date}/errands/order`, {
+    method: "PUT",
+    body: JSON.stringify({ errandIds }),
+  }).then((r) => readJson<DayPlan>(r));
+}
+
 export function errorMessage(err: unknown): string {
   if (err instanceof ApiError) {
     return err.message;

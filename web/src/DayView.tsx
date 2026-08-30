@@ -14,6 +14,8 @@ import {
   openDay,
   renameErrand,
   renameTask,
+  reorderErrands,
+  reorderTodos,
   scheduleTask,
   uncompleteErrand,
   uncompleteTodo,
@@ -67,6 +69,18 @@ function errandPlaceholder(plan: DayPlan): string {
 
 function isVoidedErrand(errand: Errand, writable: boolean): boolean {
   return errand.status === "expired" || (!writable && errand.status !== "completed");
+}
+
+function swapAt<T>(items: T[], index: number, delta: -1 | 1): T[] | null {
+  const nextIndex = index + delta;
+  if (index < 0 || nextIndex < 0 || nextIndex >= items.length) {
+    return null;
+  }
+  const next = items.slice();
+  const tmp = next[index];
+  next[index] = next[nextIndex];
+  next[nextIndex] = tmp;
+  return next;
 }
 
 export function DayView({
@@ -349,6 +363,36 @@ export function DayView({
     void apply(() => deleteErrand(errand.id));
   }
 
+  function onMoveTodo(todo: Todo, delta: -1 | 1): void {
+    if (!plan?.writable) {
+      return;
+    }
+    const ids = swapAt(
+      plan.todos.map((item) => item.taskId),
+      plan.todos.findIndex((item) => item.taskId === todo.taskId),
+      delta,
+    );
+    if (!ids) {
+      return;
+    }
+    void apply(() => reorderTodos(plan.date, ids));
+  }
+
+  function onMoveErrand(errand: Errand, delta: -1 | 1): void {
+    if (!plan?.writable) {
+      return;
+    }
+    const ids = swapAt(
+      plan.errands.map((item) => item.id),
+      plan.errands.findIndex((item) => item.id === errand.id),
+      delta,
+    );
+    if (!ids) {
+      return;
+    }
+    void apply(() => reorderErrands(plan.date, ids));
+  }
+
   if (loading) {
     return (
       <main className="page">
@@ -404,10 +448,12 @@ export function DayView({
           <p className="muted">{emptyCopy(plan)}</p>
         ) : (
           <ul className="todos">
-            {plan.todos.map((todo) => (
+            {plan.todos.map((todo, index) => (
               <TodoRow
                 key={todo.taskId}
                 todo={todo}
+                index={index}
+                count={plan.todos.length}
                 writable={plan.writable}
                 today={plan.serverToday}
                 onToggle={onToggle}
@@ -415,6 +461,7 @@ export function DayView({
                 onDelete={onDelete}
                 onUnschedule={onUnschedule}
                 onReschedule={onReschedule}
+                onMove={onMoveTodo}
               />
             ))}
           </ul>
@@ -444,14 +491,17 @@ export function DayView({
           <p className="muted">{errandEmptyCopy(plan)}</p>
         ) : (
           <ul className="todos">
-            {plan.errands.map((errand) => (
+            {plan.errands.map((errand, index) => (
               <ErrandRow
                 key={errand.id}
                 errand={errand}
+                index={index}
+                count={plan.errands.length}
                 writable={plan.writable}
                 onToggle={onToggleErrand}
                 onRename={onRenameErrand}
                 onDelete={onDeleteErrand}
+                onMove={onMoveErrand}
               />
             ))}
           </ul>
@@ -474,6 +524,8 @@ export function DayView({
 
 type TodoRowProps = {
   todo: Todo;
+  index: number;
+  count: number;
   writable: boolean;
   today: string;
   onToggle: (todo: Todo) => void;
@@ -481,10 +533,13 @@ type TodoRowProps = {
   onDelete: (todo: Todo) => void;
   onUnschedule: (todo: Todo) => void;
   onReschedule: (todo: Todo, date: string) => void;
+  onMove: (todo: Todo, delta: -1 | 1) => void;
 };
 
 function TodoRow({
   todo,
+  index,
+  count,
   writable,
   today,
   onToggle,
@@ -492,6 +547,7 @@ function TodoRow({
   onDelete,
   onUnschedule,
   onReschedule,
+  onMove,
 }: TodoRowProps) {
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(todo.title);
@@ -556,6 +612,28 @@ function TodoRow({
       )}
       {writable ? (
         <span className="todo-actions">
+          {count >= 2 ? (
+            <>
+              <button
+                type="button"
+                className="linkish quiet"
+                disabled={index === 0}
+                aria-label="上移"
+                onClick={() => onMove(todo, -1)}
+              >
+                上移
+              </button>
+              <button
+                type="button"
+                className="linkish quiet"
+                disabled={index === count - 1}
+                aria-label="下移"
+                onClick={() => onMove(todo, 1)}
+              >
+                下移
+              </button>
+            </>
+          ) : null}
           {!todo.completedOnDay ? (
             <>
               <button
@@ -625,18 +703,24 @@ function InventoryAddBlock({
 
 type ErrandRowProps = {
   errand: Errand;
+  index: number;
+  count: number;
   writable: boolean;
   onToggle: (errand: Errand) => void;
   onRename: (errand: Errand, title: string) => void;
   onDelete: (errand: Errand) => void;
+  onMove: (errand: Errand, delta: -1 | 1) => void;
 };
 
 function ErrandRow({
   errand,
+  index,
+  count,
   writable,
   onToggle,
   onRename,
   onDelete,
+  onMove,
 }: ErrandRowProps) {
   const voided = isVoidedErrand(errand, writable);
   const [editing, setEditing] = useState(false);
@@ -713,14 +797,40 @@ function ErrandRow({
           {errand.title}
         </button>
       )}
-      {writable && !voided ? (
-        <button
-          type="button"
-          className="linkish"
-          onClick={() => onDelete(errand)}
-        >
-          删除
-        </button>
+      {writable ? (
+        <span className="todo-actions">
+          {count >= 2 ? (
+            <>
+              <button
+                type="button"
+                className="linkish quiet"
+                disabled={index === 0}
+                aria-label="上移"
+                onClick={() => onMove(errand, -1)}
+              >
+                上移
+              </button>
+              <button
+                type="button"
+                className="linkish quiet"
+                disabled={index === count - 1}
+                aria-label="下移"
+                onClick={() => onMove(errand, 1)}
+              >
+                下移
+              </button>
+            </>
+          ) : null}
+          {!voided ? (
+            <button
+              type="button"
+              className="linkish"
+              onClick={() => onDelete(errand)}
+            >
+              删除
+            </button>
+          ) : null}
+        </span>
       ) : null}
     </li>
   );

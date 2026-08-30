@@ -207,17 +207,52 @@ def _applied_versions(conn: sqlite3.Connection) -> set[int]:
     return {int(r[0]) for r in conn.execute("SELECT version FROM schema_migrations")}
 
 
+def copy_sqlite(source_conn: sqlite3.Connection, dest: Path) -> None:
+    """WAL-safe snapshot via sqlite3 backup API (not a raw file copy)."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    backup_conn = sqlite3.connect(str(dest))
+    try:
+        source_conn.backup(backup_conn)
+    except Exception:
+        backup_conn.close()
+        dest.unlink(missing_ok=True)
+        raise
+    backup_conn.close()
+
+
+def backup_sqlite_file(source: Path, dest: Path) -> Path:
+    """Copy planner.sqlite with the backup API so a live WAL is included."""
+    source = source.expanduser().resolve()
+    dest = dest.expanduser()
+    if not source.exists():
+        raise FileNotFoundError(source)
+    if dest.exists():
+        raise FileExistsError(dest)
+    dest = dest.resolve()
+    if dest == source:
+        raise ValueError("不能备份到源文件")
+    src = sqlite3.connect(
+        str(source),
+        isolation_level=None,
+        check_same_thread=False,
+    )
+    try:
+        src.execute("PRAGMA busy_timeout = 5000")
+        copy_sqlite(src, dest)
+    except Exception:
+        dest.unlink(missing_ok=True)
+        raise
+    finally:
+        src.close()
+    return dest
+
+
 def _backup_before_migrate(
     conn: sqlite3.Connection, data_dir: Path, version: int
 ) -> None:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     dest = data_dir / "backups" / f"pre-migrate-{version}-{stamp}.sqlite"
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    backup_conn = sqlite3.connect(dest)
-    try:
-        conn.backup(backup_conn)
-    finally:
-        backup_conn.close()
+    copy_sqlite(conn, dest)
 
 
 def _seed_timezone(conn: sqlite3.Connection) -> None:

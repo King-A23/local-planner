@@ -135,7 +135,10 @@ def test_debug_read(client: TestClient) -> None:
     debug = client.get("/api/debug")
     assert debug.status_code == 200
     body = debug.json()
+    assert body["today"] == TODAY
     assert body["timezone"] == "Asia/Shanghai"
+    assert body["lastSettledDate"] == TODAY
     assert body["schemaVersion"] == 1
     assert body["integrityCheck"] == "ok"
     assert "dbPath" in body
+    assert set(body["counts"]) == {"tasks", "openDays", "sealedDays", "errands"}

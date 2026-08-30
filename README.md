@@ -1,20 +1,66 @@
-# Local Planner（工作名）
+# Local Planner
 
-本地优先的个人计划软件。目标是同时覆盖：
+本机个人日计划。打开即是今天：正经待办与零碎差事两列清单，长期任务住在库存里。数据只在这台 Mac 上。
 
-- **每天**：制定当天要做什么
-- **长期**：记录还没做完、需要持续推进的任务
+日历日固定 `Asia/Shanghai`（`YYYY-MM-DD`）。进程只绑定 `127.0.0.1`。
 
-## 仓库状态
+## 如何运行
 
-| 阶段 | 状态 |
-| --- | --- |
-| 工作区 | 已建立 |
-| 产品需求 | 已冻结（D1–D14） |
-| 设计文档 | 已通过审查（0 open issues） |
-| 实现 | 脚手架（无产品逻辑） |
+需要 Python 3.12+ 与 Node.js（构建前端）。
 
-已确认决策见 [docs/product/decisions.md](docs/product/decisions.md)。
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+cd web && npm ci && npm run build && cd ..
+python -m local_planner serve
+```
+
+浏览器**只**打开启动日志里的地址：
+
+```
+http://127.0.0.1:8787
+```
+
+不要用 `http://localhost:8787`。macOS 上 `localhost` 常解析到 `::1`，本进程不听 IPv6，会连不上。
+
+生产 `serve` 同时提供 JSON API 与 `web/dist` SPA。缺 `web/dist/index.html` 时拒绝启动，并提示 `run npm run build`。
+
+换端口：`LOCAL_PLANNER_PORT` 或 `python -m local_planner serve --port 9000`。
+
+默认数据文件：`~/Library/Application Support/local-planner/planner.sqlite`。覆盖目录：`LOCAL_PLANNER_DATA_DIR`（文件名仍是 `planner.sqlite`）。
+
+开发：`LOCAL_PLANNER_DEV=1 python -m local_planner serve` 可无 dist（只开 API）；另开终端 `cd web && npm i && npm run dev`，Vite 把 `/api` 代理到 `8787`。`LOCAL_PLANNER_DEV=1` 时数据目录是仓库内 `.data/`（已 gitignore），并允许 Vite `5173` Origin。
+
+## 备份
+
+WAL 模式下不要只拷贝 `planner.sqlite`（会漏掉 `-wal`）。用 SQLite backup API：
+
+```bash
+python -m local_planner backup
+# 默认写到 $DATA_DIR/backups/planner-YYYYMMDD-HHMMSS.sqlite
+
+python -m local_planner backup ~/Desktop/planner-copy.sqlite
+python -m local_planner backup /path/to/dir
+```
+
+进程运行时也可以备份。v1 不自动定时备份、不同步网盘。备份 = 复制这个 sqlite 文件。
+
+## 重置
+
+停进程，删除 `planner.sqlite`、`planner.sqlite-wal`、`planner.sqlite-shm`，再 `python -m local_planner serve`。得到空今天。
+
+回滚一次坏迁移：停进程，把 `backups/pre-migrate-….sqlite` 拷回 `planner.sqlite`，删 `-wal`/`-shm`，用旧代码启动。
+
+## GET /api/debug
+
+仅本机 loopback 可读（进程绑 `127.0.0.1`）。响应含 `dbPath`，不要把 bind 改成 `0.0.0.0`。
+
+```bash
+curl http://127.0.0.1:8787/api/debug
+```
+
+字段：`today`、`timezone`（`Asia/Shanghai`）、`lastSettledDate`（水位）、`dbPath`、`schemaVersion`（`MAX(schema_migrations.version)`）、`integrityCheck`、`counts`。日界异常时先看日志里的 `settled …`，再看这个水位。
 
 ## 文档
 
@@ -23,29 +69,4 @@
 - [已确认决策](docs/product/decisions.md)
 - [产品文档索引](docs/product/README.md)
 
-工作名 `local-planner` 可在需求稳定后改名。
-
-## 开发预告
-
-需要 Python 3.12+。
-
-```bash
-python3.12 -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
-pytest
-python -m local_planner --help
-```
-
-生产 `serve` 同时提供 JSON API 与 `web/dist` SPA。先构建前端：
-
-```bash
-cd web && npm ci && npm run build && cd ..
-python -m local_planner serve
-# 只打开启动日志里的 http://127.0.0.1:8787
-# 不要用 http://localhost:8787（macOS 可能走到 ::1，本进程不听 IPv6）
-```
-
-缺 `web/dist/index.html` 时生产 `serve` 拒绝启动，并提示 `run npm run build`。
-
-开发：`LOCAL_PLANNER_DEV=1 python -m local_planner serve` 可无 dist（只开 API）；另终 `cd web && npm i && npm run dev`，Vite 把 `/api` 代理到 `8787`。`LOCAL_PLANNER_DEV=1` 时数据目录是仓库内 `.data/`（已 gitignore），并允许 Vite `5173` Origin。进程只绑定 `127.0.0.1`。日历日固定 `Asia/Shanghai`。
+壳上显示名是 **Local Planner**。v1 不做搜索、标签、同步、小时表。

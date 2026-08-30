@@ -51,7 +51,7 @@ body {
 
 .nav a:hover,
 .brand:hover,
-.linkish:hover,
+.linkish:hover:not(:disabled),
 .title:hover:not(:disabled) {
   text-decoration: underline;
 }
@@ -204,6 +204,12 @@ body {
 
 .linkish.quiet {
   color: #355d8a;
+}
+
+.linkish:disabled {
+  color: #c5c0b6;
+  cursor: default;
+  text-decoration: none;
 }
 
 .muted {

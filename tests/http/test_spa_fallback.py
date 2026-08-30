@@ -129,7 +129,6 @@ def test_day_view_has_errand_column_not_on_inventory() -> None:
     assert "deleteErrand" in day_view
     assert "/api/days/${date}/errands" in api
     assert "/api/errands/${errandId}/complete" in api
-    assert "reorderErrand" not in api
     assert "/api/calendar" not in day_view
     assert "ListInventory" not in day_view
     assert "零碎差事" not in app
@@ -239,6 +238,27 @@ def test_inventory_schedule_and_inline_add_ui() -> None:
     assert "new Date(" not in date_pick
     assert 'type="date"' in date_pick
     assert 'role="dialog"' not in date_pick
+
+
+def test_reorder_ui_uses_existing_order_apis() -> None:
+    web = Path(__file__).resolve().parents[2] / "web"
+    src = web / "src"
+    api = (src / "api.ts").read_text(encoding="utf-8")
+    day_view = (src / "DayView.tsx").read_text(encoding="utf-8")
+    inventory = (src / "InventoryPage.tsx").read_text(encoding="utf-8")
+
+    assert "reorderTodos" in api
+    assert "reorderErrands" in api
+    assert "/api/days/${date}/todos/order" in api
+    assert "/api/days/${date}/errands/order" in api
+    assert "reorderTodos(plan.date, ids)" in day_view
+    assert "reorderErrands(plan.date, ids)" in day_view
+    assert 'aria-label="上移"' in day_view
+    assert 'aria-label="下移"' in day_view
+    assert "onMoveTodo" in day_view
+    assert "onMoveErrand" in day_view
+    assert "reorderTodos" not in inventory
+    assert "reorderErrands" not in inventory
 
 
 def _write_index(path: Path, body: str = "ok") -> Path:
