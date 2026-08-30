@@ -35,9 +35,13 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         dest = args.command[1] if len(args.command) > 1 else None
         from local_planner.backup import backup
+        from local_planner.runtime import LockTimeout
 
         try:
             written = backup(dest)
+        except LockTimeout as exc:
+            print(exc.message, file=sys.stderr)
+            return 3
         except FileNotFoundError as exc:
             print(f"找不到数据库：{exc}", file=sys.stderr)
             return 1

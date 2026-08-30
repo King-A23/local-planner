@@ -101,7 +101,9 @@ def test_delete_task_with_sealed_history_conflicts(
             tid = plan.todos[0].task_id
             planner.seal_day(TODAY)
         with TestClient(
-            create_app(clock=clock, uow=uow, port=8787, dev=False),
+            create_app(
+                clock=clock, uow=uow, port=8787, dev=False, data_dir=tmp_path
+            ),
             base_url="http://127.0.0.1:8787",
         ) as client:
             response = client.delete(f"/api/tasks/{tid}")

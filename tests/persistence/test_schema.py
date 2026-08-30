@@ -331,6 +331,9 @@ def test_begin_immediate_only_lives_in_uow_transaction() -> None:
         rel = path.relative_to(SRC_ROOT)
         if rel.parts[0] != "http":
             assert "PLANNER_LOCK" not in text, rel
+        if rel.parts[0] == "persistence":
+            assert "interprocess_lock" not in text, rel
+            assert "fcntl" not in text, rel
         if "BEGIN IMMEDIATE" in text:
             assert rel == Path("persistence") / "store.py"
         if path.parent.name == "domain":

@@ -1,14 +1,16 @@
 # Agent 约定
 
-这是个人本地计划软件的产品仓库。实现以 `docs/design/v1-design.md` 为准，产品范围以冻结需求为准。
+这是个人本地计划软件的产品仓库。实现以设计文档为准，产品范围以冻结需求为准。
 
 ## 当前范围
 
 - 允许：产品文档、需求记录、开放问题、工作区脚手架
 - 允许：按 `docs/design/v1-design.md` 实现应用代码与测试
+- 允许：按 `docs/design/v2a-cli-design.md` 实现 v2a Agent CLI（不含 v2b 时间字段、不含 v2c 自然语言窗口）
 - 禁止：扩大冻结非目标（小时表、同步、手机、项目树、提醒、AI 排程等）
 - 禁止：在 UI 层复制日界结转或只读规则；领域层是唯一事实来源
 - v1 范围以 `docs/product/v1-requirements.md` 和 `docs/product/decisions.md` 为准
+- v2a 范围以 `docs/product/v2-requirements.md` §5 与 `docs/design/v2a-cli-design.md` 为准
 
 ## 实现约束
 

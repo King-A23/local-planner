@@ -10,44 +10,28 @@ from pathlib import Path
 
 import uvicorn
 
-from local_planner.clock import Clock, FrozenClock, SystemClock
-from local_planner.domain.settlement import ensure_settled
+from local_planner.clock import Clock
 from local_planner.domain.store import UnitOfWork
 from local_planner.http.app import DEFAULT_PORT, PLANNER_LOCK, create_app
 from local_planner.http.spa import resolve_web_dist
-from local_planner.persistence import SqliteUnitOfWork
+from local_planner.paths import data_dir, db_path, resolve_clock
+from local_planner.runtime import (
+    LockTimeout,
+    configure_logging,
+    interprocess_lock,
+    open_persistent_uow,
+    planner_txn,
+)
 
 logger = logging.getLogger(__name__)
 
-DB_NAME = "planner.sqlite"
 SETTLE_INTERVAL_SECONDS = 30
-
-
-def data_dir() -> Path:
-    override = os.environ.get("LOCAL_PLANNER_DATA_DIR")
-    if override:
-        return Path(override).expanduser()
-    if os.environ.get("LOCAL_PLANNER_DEV") == "1":
-        return Path(__file__).resolve().parents[3] / ".data"
-    return Path.home() / "Library" / "Application Support" / "local-planner"
-
-
-def db_path() -> Path:
-    return data_dir() / DB_NAME
 
 
 def resolve_port(cli_port: int | None = None) -> int:
     if cli_port is not None:
         return cli_port
     return int(os.environ.get("LOCAL_PLANNER_PORT", str(DEFAULT_PORT)))
-
-
-def resolve_clock() -> Clock:
-    pinned = os.environ.get("LOCAL_PLANNER_CLOCK")
-    allowed = os.environ.get("LOCAL_PLANNER_ALLOW_CLOCK_OVERRIDE") == "1"
-    if pinned and allowed:
-        return FrozenClock(pinned)
-    return SystemClock()
 
 
 def uvicorn_run_kwargs(port: int) -> dict[str, object]:
@@ -66,10 +50,12 @@ class SettlementTimer:
         self,
         clock: Clock,
         uow: UnitOfWork,
+        data_dir: Path,
         interval: float = SETTLE_INTERVAL_SECONDS,
     ) -> None:
         self._clock = clock
         self._uow = uow
+        self._data_dir = data_dir
         self._interval = interval
         self._stop = threading.Event()
         self._thread = threading.Thread(
@@ -87,49 +73,50 @@ class SettlementTimer:
         while not self._stop.wait(self._interval):
             try:
                 with PLANNER_LOCK:
-                    with self._uow.transaction():
-                        ensure_settled(self._clock, self._uow)
+                    try:
+                        with interprocess_lock(self._data_dir, timeout=0):
+                            with planner_txn(self._clock, self._uow):
+                                pass
+                    except LockTimeout:
+                        logger.info("code=LockTimeout wait_s=0 skip")
             except Exception:
                 logger.exception("periodic ensure_settled failed")
 
 
 def serve(port: int | None = None) -> None:
-    logging.basicConfig(
-        level=getattr(
-            logging, os.environ.get("LOCAL_PLANNER_LOG", "INFO").upper(), logging.INFO
-        )
-    )
+    configure_logging()
     port = resolve_port(port)
     clock = resolve_clock()
-    path = db_path()
-    uow = SqliteUnitOfWork.open(path)
+    ddir, path = data_dir(), db_path()
+    try:
+        uow = open_persistent_uow(ddir, path, clock)
+    except LockTimeout:
+        print("计划正忙，请重试", file=sys.stderr)
+        raise SystemExit(3)
     dev = os.environ.get("LOCAL_PLANNER_DEV") == "1"
-    with PLANNER_LOCK:
-        with uow.transaction():
-            ensure_settled(clock, uow)
-            today = clock.today()
-            last = uow.meta.get("last_settled_date")
     dist = resolve_web_dist()
     if dist is None and not dev:
         print("Missing web/dist/index.html; run npm run build", file=sys.stderr)
         uow.close()
         raise SystemExit(1)
+    last = uow.meta.get("last_settled_date")
+    logger.info(
+        "startup data_dir=%s db=%s today=%s last_settled=%s",
+        ddir,
+        path,
+        clock.today(),
+        last,
+    )
     app = create_app(
         clock=clock,
         uow=uow,
         port=port,
         dev=dev,
         dist_dir=dist,
-    )
-    logger.info(
-        "startup data_dir=%s db=%s today=%s last_settled=%s",
-        data_dir(),
-        path,
-        today,
-        last,
+        data_dir=ddir,
     )
     print(f"http://127.0.0.1:{port}", flush=True)
-    timer = SettlementTimer(clock, uow)
+    timer = SettlementTimer(clock, uow, ddir)
     timer.start()
     try:
         uvicorn.run(app, **uvicorn_run_kwargs(port))

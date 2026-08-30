@@ -29,10 +29,15 @@ def spa_dist(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def spa_client(
-    clock: FrozenClock, uow: SqliteUnitOfWork, spa_dist: Path
+    clock: FrozenClock, uow: SqliteUnitOfWork, spa_dist: Path, tmp_path: Path
 ) -> Iterator[TestClient]:
     app = create_app(
-        clock=clock, uow=uow, port=8787, dev=False, dist_dir=spa_dist
+        clock=clock,
+        uow=uow,
+        port=8787,
+        dev=False,
+        dist_dir=spa_dist,
+        data_dir=tmp_path,
     )
     with TestClient(app, base_url="http://127.0.0.1:8787") as client:
         yield client

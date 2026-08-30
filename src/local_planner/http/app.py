@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sqlite3
 import threading
 import time
 from dataclasses import dataclass
@@ -25,15 +26,16 @@ from local_planner.domain.errors import (
     NotFound,
     ValidationError,
 )
-from local_planner.domain.models import (
-    DayPlan,
-    InventoryItem,
-    is_writable,
-    parse_calendar_date,
-)
-from local_planner.domain.settlement import ensure_settled, inclusive_range
 from local_planner.domain.store import UnitOfWork
 from local_planner.http.spa import mount_spa
+from local_planner.present import (
+    calendar_payload,
+    command_payload,
+    day_plan_payload,
+    inventory_item_payload,
+    meta_payload,
+)
+from local_planner.runtime import InternalError, LockTimeout, interprocess_lock, planner_txn
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +50,7 @@ class AppContext:
     uow: UnitOfWork
     port: int
     dev: bool
+    data_dir: Path
 
 
 class TitleBody(BaseModel):
@@ -73,76 +76,12 @@ def health() -> dict[str, bool]:
 
 def _locked(ctx: AppContext, fn: Callable[[str], dict[str, Any]]) -> dict[str, Any]:
     with PLANNER_LOCK:
-        with ctx.uow.transaction():
-            ensure_settled(ctx.clock, ctx.uow)
-            today = ctx.clock.today()
-            return fn(today)
-
-
-def day_plan_payload(plan: DayPlan, today: str) -> dict[str, Any]:
-    return {
-        "date": plan.date,
-        "serverToday": today,
-        "isToday": plan.date == today,
-        "isPast": plan.date < today,
-        "isFuture": plan.date > today,
-        "writable": is_writable(plan, today),
-        "status": plan.status,
-        "todos": [
-            {
-                "taskId": item.task_id,
-                "title": item.title_snapshot,
-                "completedOnDay": item.completed_on_day,
-                "sortOrder": item.sort_order,
-            }
-            for item in plan.todos
-        ],
-        "errands": [
-            {
-                "id": item.id,
-                "title": item.title,
-                "status": item.status,
-                "sortOrder": item.sort_order,
-            }
-            for item in plan.errands
-        ],
-    }
-
-
-def inventory_item_payload(item: InventoryItem) -> dict[str, Any]:
-    return {
-        "taskId": item.task.id,
-        "title": item.task.title,
-        "createdAt": item.task.created_at,
-    }
-
-
-def command_payload(
-    result: DayPlan | InventoryItem | None, today: str
-) -> dict[str, Any]:
-    if result is None:
-        return {"ok": True}
-    if isinstance(result, DayPlan):
-        return day_plan_payload(result, today)
-    return inventory_item_payload(result)
-
-
-def calendar_payload(
-    uow: UnitOfWork, start: str, end: str, today: str
-) -> dict[str, Any]:
-    start_iso = parse_calendar_date(start).isoformat()
-    end_iso = parse_calendar_date(end).isoformat()
-    if start_iso > end_iso:
-        raise ValidationError("日期范围无效")
-    days: list[dict[str, Any]] = []
-    for day in inclusive_range(start_iso, end_iso):
-        todo_count = len(uow.list_entries(day))
-        errand_count = len(uow.list_errands(day))
-        if todo_count or errand_count:
-            days.append(
-                {"date": day, "todoCount": todo_count, "errandCount": errand_count}
-            )
-    return {"today": today, "days": days}
+        with interprocess_lock(ctx.data_dir):
+            try:
+                with planner_txn(ctx.clock, ctx.uow) as today:
+                    return fn(today)
+            except sqlite3.OperationalError as exc:
+                raise InternalError("内部错误") from exc
 
 
 def debug_payload(uow: UnitOfWork, today: str) -> dict[str, Any]:
@@ -195,6 +134,23 @@ def _error_body(exc: DomainError) -> dict[str, str]:
     return {"error": exc.code, "message": exc.message}
 
 
+def _data_dir_from_uow(uow: UnitOfWork) -> Path:
+    """Derive lock dir from this uow's sqlite file. Never the production data dir."""
+    conn = getattr(uow, "conn", None)
+    if conn is None:
+        raise ValueError("create_app 需要 data_dir")
+    row = conn.execute("PRAGMA database_list").fetchone()
+    db_file = ""
+    if row is not None:
+        try:
+            db_file = row["file"]
+        except (KeyError, IndexError, TypeError):
+            db_file = row[2] if len(row) > 2 else ""
+    if not db_file:
+        raise ValueError("create_app 需要 data_dir")
+    return Path(db_file).parent
+
+
 def create_app(
     *,
     clock: Clock,
@@ -202,10 +158,13 @@ def create_app(
     port: int = DEFAULT_PORT,
     dev: bool | None = None,
     dist_dir: Path | None = None,
+    data_dir: Path | None = None,
 ) -> FastAPI:
     if dev is None:
         dev = os.environ.get("LOCAL_PLANNER_DEV") == "1"
-    ctx = AppContext(clock=clock, uow=uow, port=port, dev=dev)
+    if data_dir is None:
+        data_dir = _data_dir_from_uow(uow)
+    ctx = AppContext(clock=clock, uow=uow, port=port, dev=dev, data_dir=data_dir)
     app = FastAPI(
         title="Local Planner",
         docs_url=None,
@@ -262,6 +221,20 @@ def create_app(
             )
         return JSONResponse(_error_body(exc), status_code=_error_status(exc))
 
+    @app.exception_handler(LockTimeout)
+    def lock_timeout(_request: Request, exc: LockTimeout) -> JSONResponse:
+        return JSONResponse(
+            {"error": exc.code, "message": exc.message},
+            status_code=503,
+        )
+
+    @app.exception_handler(InternalError)
+    def internal_error(_request: Request, exc: InternalError) -> JSONResponse:
+        return JSONResponse(
+            {"error": exc.code, "message": exc.message},
+            status_code=500,
+        )
+
     @app.exception_handler(RequestValidationError)
     def invalid_request(_request: Request, _exc: RequestValidationError) -> JSONResponse:
         return JSONResponse(
@@ -287,15 +260,7 @@ def create_app(
 
     @app.get("/api/meta")
     def get_meta() -> dict[str, Any]:
-        return _locked(
-            ctx,
-            lambda today: {
-                "today": today,
-                "timezone": "Asia/Shanghai",
-                "lastSettledDate": ctx.uow.meta.get("last_settled_date"),
-                "inventoryCount": len(ctx.uow.list_inventory_tasks()),
-            },
-        )
+        return _locked(ctx, lambda today: meta_payload(ctx.uow, today))
 
     @app.get("/api/debug")
     def get_debug() -> dict[str, Any]:
@@ -395,8 +360,7 @@ def create_app(
         return _locked(
             ctx,
             lambda today: day_plan_payload(
-                cmds.add_errand(ctx.clock, ctx.uow, day_date, body.title),
-                today,
+                cmds.add_errand(ctx.clock, ctx.uow, day_date, body.title), today
             ),
         )
 
