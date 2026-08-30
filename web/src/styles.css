@@ -147,6 +147,7 @@ body {
 
 .todo {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem;
   padding: 0.35rem 0;
@@ -199,6 +200,10 @@ body {
   border: 0;
   padding: 0;
   cursor: pointer;
+}
+
+.linkish.quiet {
+  color: #355d8a;
 }
 
 .muted {
@@ -340,4 +345,92 @@ body {
   height: 0.28rem;
   border-radius: 50%;
   background: #355d8a;
+}
+
+.todo-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem 0.65rem;
+  flex: none;
+}
+
+.inventory-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.inventory-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.45rem 0.75rem;
+  padding: 0.55rem 0;
+  border-bottom: 1px solid #ece7db;
+}
+
+.inventory-add {
+  margin-top: 0.85rem;
+  padding-top: 0.75rem;
+  border-top: 1px dashed #e4dfd3;
+}
+
+.inventory-add h3 {
+  margin: 0 0 0.35rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.inventory-inline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.inventory-inline li {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.25rem 0;
+}
+
+.open-inventory {
+  display: inline-block;
+  margin-top: 0.45rem;
+  color: #355d8a;
+  text-decoration: none;
+}
+
+.open-inventory:hover {
+  text-decoration: underline;
+}
+
+.date-pick-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.date-pick-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  clip: rect(0 0 0 0);
+  overflow: hidden;
+  border: 0;
+  padding: 0;
+}
+
+.date-pick-input.visible {
+  position: static;
+  width: auto;
+  clip: auto;
+  overflow: visible;
+  font: inherit;
+  font-size: 0.85rem;
+  border: 1px solid #d0cbbf;
+  border-radius: 0.3rem;
+  padding: 0.1rem 0.3rem;
+  background: #fff;
 }

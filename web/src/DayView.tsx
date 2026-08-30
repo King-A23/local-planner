@@ -10,21 +10,28 @@ import {
   deleteTask,
   errorMessage,
   isDayPlan,
+  listInventory,
   openDay,
   renameErrand,
   renameTask,
+  scheduleTask,
   uncompleteErrand,
   uncompleteTodo,
+  unscheduleTask,
   type DayPlan,
   type Errand,
+  type InventoryItem,
   type Todo,
 } from "./api";
-import { addCivilDays, formatDayHeading } from "./dates";
+import { INVENTORY_INLINE_LIMIT } from "./constants";
+import { DatePickButton } from "./DatePickButton";
+import { addCivilDays, formatDayHeading, maxWritableDate } from "./dates";
 import { handleNavClick } from "./route";
 
 type DayViewProps = {
   date: string;
   serverToday?: string;
+  onInventoryChange?: () => void;
 };
 
 function emptyCopy(plan: DayPlan): string {
@@ -62,12 +69,18 @@ function isVoidedErrand(errand: Errand, writable: boolean): boolean {
   return errand.status === "expired" || (!writable && errand.status !== "completed");
 }
 
-export function DayView({ date, serverToday }: DayViewProps) {
+export function DayView({
+  date,
+  serverToday,
+  onInventoryChange,
+}: DayViewProps) {
   const [plan, setPlan] = useState<DayPlan | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState("");
   const [errandDraft, setErrandDraft] = useState("");
+  const [inventory, setInventory] = useState<InventoryItem[]>([]);
+  const [inventoryError, setInventoryError] = useState<string | null>(null);
   const planRef = useRef(plan);
   planRef.current = plan;
 
@@ -100,6 +113,30 @@ export function DayView({ date, serverToday }: DayViewProps) {
       cancelled = true;
     };
   }, [date, serverToday]);
+
+  useEffect(() => {
+    if (!plan?.writable) {
+      setInventory([]);
+      setInventoryError(null);
+      return;
+    }
+    let cancelled = false;
+    listInventory()
+      .then((data) => {
+        if (!cancelled) {
+          setInventory(data.items);
+          setInventoryError(null);
+        }
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setInventoryError(errorMessage(err));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [date, plan?.writable]);
 
   async function apply(
     work: () => Promise<DayPlan | void>,
@@ -192,6 +229,60 @@ export function DayView({ date, serverToday }: DayViewProps) {
             }
           : current,
       );
+    });
+  }
+
+  async function refreshInventory(): Promise<void> {
+    const data = await listInventory();
+    setInventory(data.items);
+    setInventoryError(null);
+  }
+
+  function dropTodo(taskId: string): void {
+    setPlan((current) =>
+      current
+        ? {
+            ...current,
+            todos: current.todos.filter((item) => item.taskId !== taskId),
+          }
+        : current,
+    );
+  }
+
+  function onUnschedule(todo: Todo): void {
+    if (!plan?.writable || todo.completedOnDay) {
+      return;
+    }
+    void apply(async () => {
+      await unscheduleTask(todo.taskId);
+      dropTodo(todo.taskId);
+      await refreshInventory();
+      onInventoryChange?.();
+    });
+  }
+
+  function onReschedule(todo: Todo, nextDate: string): void {
+    if (!plan?.writable || todo.completedOnDay) {
+      return;
+    }
+    void apply(async () => {
+      const next = await scheduleTask(todo.taskId, nextDate);
+      if (next.date === plan.date) {
+        return next;
+      }
+      dropTodo(todo.taskId);
+    });
+  }
+
+  function onScheduleHere(item: InventoryItem): void {
+    if (!plan?.writable) {
+      return;
+    }
+    void apply(async () => {
+      const next = await scheduleTask(item.taskId, plan.date);
+      await refreshInventory();
+      onInventoryChange?.();
+      return next;
     });
   }
 
@@ -300,9 +391,12 @@ export function DayView({ date, serverToday }: DayViewProps) {
                 key={todo.taskId}
                 todo={todo}
                 writable={plan.writable}
+                today={plan.serverToday}
                 onToggle={onToggle}
                 onRename={onRename}
                 onDelete={onDelete}
+                onUnschedule={onUnschedule}
+                onReschedule={onReschedule}
               />
             ))}
           </ul>
@@ -317,6 +411,13 @@ export function DayView({ date, serverToday }: DayViewProps) {
               maxLength={200}
             />
           </form>
+        ) : null}
+        {plan.writable ? (
+          <InventoryAddBlock
+            items={inventory}
+            error={inventoryError}
+            onSchedule={onScheduleHere}
+          />
         ) : null}
       </section>
       <section className="column">
@@ -356,17 +457,23 @@ export function DayView({ date, serverToday }: DayViewProps) {
 type TodoRowProps = {
   todo: Todo;
   writable: boolean;
+  today: string;
   onToggle: (todo: Todo) => void;
   onRename: (todo: Todo, title: string) => void;
   onDelete: (todo: Todo) => void;
+  onUnschedule: (todo: Todo) => void;
+  onReschedule: (todo: Todo, date: string) => void;
 };
 
 function TodoRow({
   todo,
   writable,
+  today,
   onToggle,
   onRename,
   onDelete,
+  onUnschedule,
+  onReschedule,
 }: TodoRowProps) {
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(todo.title);
@@ -430,11 +537,71 @@ function TodoRow({
         </button>
       )}
       {writable ? (
-        <button type="button" className="linkish" onClick={() => onDelete(todo)}>
-          删除
-        </button>
+        <span className="todo-actions">
+          {!todo.completedOnDay ? (
+            <>
+              <button
+                type="button"
+                className="linkish quiet"
+                onClick={() => onUnschedule(todo)}
+              >
+                移回库存
+              </button>
+              <DatePickButton
+                label="改排到另一天"
+                min={today}
+                max={maxWritableDate(today)}
+                onPick={(nextDate) => onReschedule(todo, nextDate)}
+              />
+            </>
+          ) : null}
+          <button type="button" className="linkish" onClick={() => onDelete(todo)}>
+            删除
+          </button>
+        </span>
       ) : null}
     </li>
+  );
+}
+
+function InventoryAddBlock({
+  items,
+  error,
+  onSchedule,
+}: {
+  items: InventoryItem[];
+  error: string | null;
+  onSchedule: (item: InventoryItem) => void;
+}) {
+  const shown = items.slice(0, INVENTORY_INLINE_LIMIT);
+  return (
+    <div className="inventory-add">
+      <h3>从库存添加</h3>
+      {error ? <p className="error">{error}</p> : null}
+      {shown.length > 0 ? (
+        <ul className="inventory-inline">
+          {shown.map((item) => (
+            <li key={item.taskId}>
+              <span className="title">{item.title}</span>
+              <button
+                type="button"
+                className="linkish quiet"
+                onClick={() => onSchedule(item)}
+              >
+                排到这一天
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      <a
+        className="open-inventory"
+        href="/inventory"
+        onClick={(event) => handleNavClick(event, "/inventory")}
+      >
+        打开库存 →
+      </a>
+    </div>
   );
 }
 

@@ -147,3 +147,12 @@ export function formatDayHeading(iso: string): string {
   const { year, month, day } = parts;
   return `${year}年${month}月${day}日 ${WEEKDAYS[weekdaySun0(year, month, day)]}`;
 }
+
+/** Inclusive API year cap: |date.year - today.year| <= 10. */
+export function maxWritableDate(today: string): string {
+  const parts = parseCivil(today);
+  if (!parts) {
+    return today;
+  }
+  return formatCivil(parts.year + 10, 12, 31);
+}

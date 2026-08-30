@@ -164,6 +164,34 @@ export function deleteTask(taskId: string): Promise<{ ok: true }> {
   );
 }
 
+export type InventoryList = {
+  items: InventoryItem[];
+};
+
+export function listInventory(): Promise<InventoryList> {
+  return fetch("/api/inventory").then((r) => readJson<InventoryList>(r));
+}
+
+export function addToInventory(title: string): Promise<InventoryItem> {
+  return jsonRequest("/api/inventory/tasks", {
+    method: "POST",
+    body: JSON.stringify({ title }),
+  }).then((r) => readJson<InventoryItem>(r));
+}
+
+export function scheduleTask(taskId: string, date: string): Promise<DayPlan> {
+  return jsonRequest(`/api/tasks/${taskId}/schedule`, {
+    method: "POST",
+    body: JSON.stringify({ date }),
+  }).then((r) => readJson<DayPlan>(r));
+}
+
+export function unscheduleTask(taskId: string): Promise<InventoryItem> {
+  return jsonRequest(`/api/tasks/${taskId}/unschedule`, {
+    method: "POST",
+  }).then((r) => readJson<InventoryItem>(r));
+}
+
 export function errorMessage(err: unknown): string {
   if (err instanceof ApiError) {
     return err.message;

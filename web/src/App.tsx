@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { errorMessage, getMeta, type Meta } from "./api";
 import { META_POLL_MS } from "./constants";
 import { DayView } from "./DayView";
+import { InventoryPage } from "./InventoryPage";
 import { handleNavClick, parseRoute } from "./route";
 import { Shell } from "./Shell";
 
@@ -22,29 +23,24 @@ export function App() {
   const [meta, setMeta] = useState<Meta | null>(null);
   const [metaError, setMetaError] = useState<string | null>(null);
 
+  const refreshMeta = useCallback(() => {
+    getMeta()
+      .then((next) => {
+        setMeta(next);
+        setMetaError(null);
+      })
+      .catch((err: unknown) => {
+        setMetaError(errorMessage(err));
+      });
+  }, []);
+
   useEffect(() => {
-    let cancelled = false;
-    function refresh() {
-      getMeta()
-        .then((next) => {
-          if (!cancelled) {
-            setMeta(next);
-            setMetaError(null);
-          }
-        })
-        .catch((err: unknown) => {
-          if (!cancelled) {
-            setMetaError(errorMessage(err));
-          }
-        });
-    }
-    refresh();
-    const id = window.setInterval(refresh, META_POLL_MS);
+    refreshMeta();
+    const id = window.setInterval(refreshMeta, META_POLL_MS);
     return () => {
-      cancelled = true;
       window.clearInterval(id);
     };
-  }, []);
+  }, [refreshMeta]);
 
   const viewedDate =
     route.kind === "day"
@@ -55,12 +51,20 @@ export function App() {
 
   let body;
   if (route.kind === "inventory") {
-    body = (
-      <main className="page">
-        <h1>库存</h1>
-        <p className="muted">未排期的正经待办将出现在这里。</p>
-      </main>
-    );
+    if (!meta) {
+      body = (
+        <main className="page">
+          {metaError ? <p className="error">{metaError}</p> : <p>加载中…</p>}
+        </main>
+      );
+    } else {
+      body = (
+        <>
+          {metaError ? <p className="error">{metaError}</p> : null}
+          <InventoryPage today={meta.today} onInventoryChange={refreshMeta} />
+        </>
+      );
+    }
   } else if (route.kind === "notfound") {
     body = (
       <main className="page">
@@ -83,12 +87,22 @@ export function App() {
       body = (
         <>
           {metaError ? <p className="error">{metaError}</p> : null}
-          <DayView date={meta.today} serverToday={meta.today} />
+          <DayView
+            date={meta.today}
+            serverToday={meta.today}
+            onInventoryChange={refreshMeta}
+          />
         </>
       );
     }
   } else {
-    body = <DayView date={route.date} serverToday={meta?.today} />;
+    body = (
+      <DayView
+        date={route.date}
+        serverToday={meta?.today}
+        onInventoryChange={refreshMeta}
+      />
+    );
   }
 
   return (

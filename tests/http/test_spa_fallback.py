@@ -134,7 +134,8 @@ def test_day_view_has_errand_column_not_on_inventory() -> None:
     assert "ListInventory" not in day_view
     assert "零碎差事" not in app
     assert "errand" not in app.lower()
-    assert "未排期的正经待办将出现在这里" in app
+    assert "InventoryPage" in app
+    assert "未排期的正经待办将出现在这里" not in app
 
 
 def test_date_nav_calendar_readonly_and_midnight_poll() -> None:
@@ -168,7 +169,6 @@ def test_date_nav_calendar_readonly_and_midnight_poll() -> None:
     assert "[date, serverToday]" in day_view
     assert "/api/calendar" not in day_view
     assert "ListInventory" not in day_view
-    assert "从库存添加" not in day_view
 
     assert "META_POLL_MS = 30_000" in constants
     assert "setInterval" in app
@@ -191,6 +191,52 @@ def test_date_nav_calendar_readonly_and_midnight_poll() -> None:
     assert "navigate(`/d/${date}`)" in calendar
     assert 'navigate("/")' in calendar
     assert "getCalendar(from, to)" in calendar
+
+
+def test_inventory_schedule_and_inline_add_ui() -> None:
+    web = Path(__file__).resolve().parents[2] / "web"
+    src = web / "src"
+    constants = (src / "constants.ts").read_text(encoding="utf-8")
+    api = (src / "api.ts").read_text(encoding="utf-8")
+    app = (src / "App.tsx").read_text(encoding="utf-8")
+    day_view = (src / "DayView.tsx").read_text(encoding="utf-8")
+    inventory = (src / "InventoryPage.tsx").read_text(encoding="utf-8")
+    date_pick = (src / "DatePickButton.tsx").read_text(encoding="utf-8")
+
+    assert "INVENTORY_INLINE_LIMIT = 8" in constants
+    assert "listInventory" in api
+    assert "/api/inventory/tasks" in api
+    assert "/api/tasks/${taskId}/schedule" in api
+    assert "/api/tasks/${taskId}/unschedule" in api
+
+    assert "InventoryPage" in app
+    assert "onInventoryChange={refreshMeta}" in app
+
+    assert "从库存添加" in day_view
+    assert "排到这一天" in day_view
+    assert "打开库存" in day_view
+    assert 'handleNavClick(event, "/inventory")' in day_view
+    assert "移回库存" in day_view
+    assert "改排到另一天" in day_view
+    assert "INVENTORY_INLINE_LIMIT" in day_view
+    assert "items.slice(0, INVENTORY_INLINE_LIMIT)" in day_view
+    assert "plan.writable" in day_view
+    assert 'role="dialog"' not in day_view
+    assert "modal" not in day_view.lower()
+
+    assert "库存 · 未排期" in inventory
+    assert "排到今天" in inventory
+    assert "排到某天" in inventory
+    assert "记一条还不定哪天做的事" in inventory
+    assert "addToInventory" in inventory
+    assert "scheduleTask" in inventory
+    assert 'role="dialog"' not in inventory
+    assert "零碎差事" not in inventory
+    assert "errand" not in inventory.lower()
+    assert "new Date(" not in inventory
+    assert "new Date(" not in date_pick
+    assert 'type="date"' in date_pick
+    assert 'role="dialog"' not in date_pick
 
 
 def _write_index(path: Path, body: str = "ok") -> Path:
