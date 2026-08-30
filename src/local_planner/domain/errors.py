@@ -22,6 +22,10 @@ class NotFound(DomainError):
 class DaySealed(DomainError):
     code = "DaySealed"
 
+    def __init__(self, message: str, *, date: str | None = None) -> None:
+        super().__init__(message)
+        self.date = date
+
 
 class Conflict(DomainError):
     code = "Conflict"

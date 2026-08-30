@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from local_planner.clock import FrozenClock
@@ -34,7 +36,9 @@ def test_past_day_writes_are_day_sealed(client: TestClient) -> None:
     assert opened.json()["status"] == "sealed"
 
 
-def test_sealed_errand_complete_is_409_not_500(tmp_path: Path) -> None:
+def test_sealed_errand_complete_is_409_not_500(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     clock = FrozenClock(FROZEN)
     uow = SqliteUnitOfWork.open(tmp_path / "planner.sqlite")
     try:
@@ -44,10 +48,16 @@ def test_sealed_errand_complete_is_409_not_500(tmp_path: Path) -> None:
             eid = plan.errands[0].id
             planner.seal_day(TODAY)
         with _client(create_app(clock=clock, uow=uow, port=8787, dev=False)) as client:
-            complete = client.post(f"/api/errands/{eid}/complete")
+            with caplog.at_level(logging.INFO, logger="local_planner.http.app"):
+                complete = client.post(f"/api/errands/{eid}/complete")
             assert complete.status_code == 409
             assert complete.status_code != 500
             assert complete.json()["error"] == "DaySealed"
+            assert any(
+                rec.getMessage().startswith("reject code=DaySealed")
+                and f"date={TODAY}" in rec.getMessage()
+                for rec in caplog.records
+            )
             rename = client.patch(f"/api/errands/{eid}", json={"title": "篡改"})
             assert rename.status_code == 409
             assert rename.json()["error"] == "DaySealed"

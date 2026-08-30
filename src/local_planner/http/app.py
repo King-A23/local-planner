@@ -252,7 +252,11 @@ def create_app(
     @app.exception_handler(DomainError)
     def domain_error(_request: Request, exc: DomainError) -> JSONResponse:
         if isinstance(exc, DaySealed):
-            logger.info("reject code=DaySealed path=%s", _request.url.path)
+            logger.info(
+                "reject code=DaySealed date=%s path=%s",
+                exc.date,
+                _request.url.path,
+            )
         return JSONResponse(_error_body(exc), status_code=_error_status(exc))
 
     @app.exception_handler(RequestValidationError)

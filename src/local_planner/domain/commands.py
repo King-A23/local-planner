@@ -59,7 +59,7 @@ def require_writable_day(clock: Clock, uow: UnitOfWork, d: CalendarDate) -> Cale
     iso = parsed.isoformat()
     check_year_cap(iso, clock.today())
     if not is_day_writable(clock, uow, iso):
-        raise DaySealed("这一天已封印，不能改")
+        raise DaySealed("这一天已封印，不能改", date=iso)
     return iso
 
 
@@ -200,7 +200,7 @@ def unschedule(clock: Clock, uow: UnitOfWork, task_id: TaskId) -> InventoryItem:
     if current is None:
         raise Conflict("任务未排期")
     if not is_day_writable(clock, uow, current):
-        raise DaySealed("这一天已封印，不能改")
+        raise DaySealed("这一天已封印，不能改", date=current)
     uow.delete_entry(current, task_id)
     updated = replace(task, current_scheduled_date=None)
     uow.save_task(updated)
@@ -284,7 +284,6 @@ def complete_errand(clock: Clock, uow: UnitOfWork, errand_id: ErrandId) -> DayPl
 def uncomplete_errand(clock: Clock, uow: UnitOfWork, errand_id: ErrandId) -> DayPlan:
     errand = _require_errand(uow, errand_id)
     if errand.status == "expired":
-        # expired is irreversible even after the day is sealed
         raise Conflict("已作废的差事不能恢复")
     require_writable_day(clock, uow, errand.day_date)
     if errand.status != "completed":
