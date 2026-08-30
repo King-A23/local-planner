@@ -1,6 +1,8 @@
 """SQLite connection, pragmas, and schema migrations.
 
-BEGIN/COMMIT/ROLLBACK must not appear here — only UnitOfWork.transaction().
+SqliteUnitOfWork.transaction() owns command-path txn begin/commit/rollback.
+apply_migrations uses a one-shot BEGIN at open so DDL and the version row
+commit together. It must not call executescript (that issues COMMIT).
 """
 
 from __future__ import annotations
@@ -14,10 +16,15 @@ from local_planner.clock import format_utc
 
 MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
 _MIGRATION_NAME = re.compile(r"^(\d+)_.+\.sql$")
+_IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
 def open_connection(path: str | Path) -> sqlite3.Connection:
-    """Open planner.sqlite with autocommit off Python's implicit BEGIN DEFERRED."""
+    """Open planner.sqlite with isolation_level=None (SQLite autocommit).
+
+    That disables Python's implicit BEGIN DEFERRED so the only explicit
+    user transaction is SqliteUnitOfWork.transaction().
+    """
     db_path = Path(path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(
@@ -43,13 +50,141 @@ def apply_migrations(conn: sqlite3.Connection, data_dir: Path) -> None:
             continue
         if applied:
             _backup_before_migrate(conn, data_dir, version)
-        script = sql_path.read_text(encoding="utf-8")
-        conn.executescript(script)
-        conn.execute(
-            "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
-            (version, format_utc(datetime.now(timezone.utc))),
-        )
+        statements = sql_statements(sql_path.read_text(encoding="utf-8"))
+        # Open-time exception to UoW-only txns: DDL + version row must be atomic.
+        conn.execute("BEGIN")
+        try:
+            for statement in statements:
+                conn.execute(statement)
+            conn.execute(
+                "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+                (version, format_utc(datetime.now(timezone.utc))),
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
         applied.add(version)
+
+
+def sql_statements(script: str) -> list[str]:
+    """Split a migration script. CREATE TRIGGER bodies stay one statement."""
+    statements: list[str] = []
+    n = len(script)
+    i = 0
+    start = 0
+    trigger_header = False
+    trigger_body = False
+    body_stmt_start = False
+
+    def skip_leading() -> None:
+        nonlocal i, start
+        i = _skip_comment_or_space(script, i)
+        start = i
+
+    skip_leading()
+    while i < n:
+        if script.startswith("--", i):
+            nl = script.find("\n", i)
+            i = n if nl < 0 else nl + 1
+            continue
+        if script.startswith("/*", i):
+            end = script.find("*/", i + 2)
+            if end < 0:
+                raise ValueError("unclosed block comment in migration")
+            i = end + 2
+            continue
+        if script[i] in ("'", '"'):
+            if trigger_body and body_stmt_start:
+                body_stmt_start = False
+            i = _skip_string(script, i)
+            continue
+
+        ident = _IDENT.match(script, i)
+        if ident:
+            word = ident.group(0).upper()
+            if not trigger_header and not trigger_body and word == "CREATE":
+                j = _skip_comment_or_space(script, ident.end())
+                nxt = _IDENT.match(script, j)
+                if nxt is not None and nxt.group(0).upper() == "TRIGGER":
+                    trigger_header = True
+            elif trigger_header and word == "BEGIN":
+                trigger_header = False
+                trigger_body = True
+                body_stmt_start = True
+                i = ident.end()
+                continue
+            elif trigger_body and body_stmt_start and word == "END":
+                i = ident.end()
+                i = _skip_comment_or_space(script, i)
+                if i < n and script[i] == ";":
+                    i += 1
+                stmt = script[start:i].strip().rstrip(";").strip()
+                if stmt:
+                    statements.append(stmt)
+                trigger_body = False
+                body_stmt_start = False
+                skip_leading()
+                continue
+            elif trigger_body and body_stmt_start:
+                body_stmt_start = False
+            i = ident.end()
+            continue
+
+        if script[i] == ";":
+            if trigger_body:
+                body_stmt_start = True
+                i += 1
+                continue
+            stmt = script[start:i].strip()
+            if stmt:
+                statements.append(stmt)
+            i += 1
+            skip_leading()
+            continue
+
+        if trigger_body and body_stmt_start and not script[i].isspace():
+            body_stmt_start = False
+        i += 1
+
+    tail = script[start:i].strip().rstrip(";").strip()
+    if tail:
+        statements.append(tail)
+    return statements
+
+
+def _skip_comment_or_space(script: str, i: int) -> int:
+    n = len(script)
+    while i < n:
+        if script[i].isspace():
+            i += 1
+            continue
+        if script.startswith("--", i):
+            nl = script.find("\n", i)
+            i = n if nl < 0 else nl + 1
+            continue
+        if script.startswith("/*", i):
+            end = script.find("*/", i + 2)
+            if end < 0:
+                raise ValueError("unclosed block comment in migration")
+            i = end + 2
+            continue
+        break
+    return i
+
+
+def _skip_string(script: str, i: int) -> int:
+    quote = script[i]
+    i += 1
+    n = len(script)
+    while i < n:
+        if script[i] == quote:
+            if i + 1 < n and script[i + 1] == quote:
+                i += 2
+                continue
+            return i + 1
+        i += 1
+    raise ValueError("unclosed string in migration")
 
 
 def _migration_files() -> list[tuple[int, Path]]:

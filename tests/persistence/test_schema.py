@@ -66,6 +66,19 @@ def test_schema_v1_tables_indexes_triggers_and_meta(uow: SqliteUnitOfWork) -> No
         "days_no_unseal_or_mutate_sealed",
         "days_no_delete_sealed",
     }
+    indexes = {
+        row[0]
+        for row in uow.conn.execute(
+            "SELECT name FROM sqlite_master "
+            "WHERE type = 'index' AND name NOT LIKE 'sqlite_%'"
+        )
+    }
+    assert indexes == {
+        "idx_tasks_inventory",
+        "idx_tasks_schedule",
+        "idx_errands_day",
+        "idx_entries_day",
+    }
     assert uow.conn.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[
         0
     ] == 1
@@ -188,6 +201,41 @@ def test_errand_completed_at_check(uow: SqliteUnitOfWork) -> None:
     )
 
 
+def test_sql_statements_keeps_trigger_bodies_intact() -> None:
+    script = (connection_mod.MIGRATIONS_DIR / "001_init.sql").read_text(encoding="utf-8")
+    statements = connection_mod.sql_statements(script)
+    triggers = [s for s in statements if s.upper().lstrip().startswith("CREATE TRIGGER")]
+    assert len(triggers) == 8
+    for body in triggers:
+        assert "RAISE(ABORT, 'sealed day is immutable')" in body
+        assert "BEGIN" in body.upper()
+        assert body.rstrip().upper().endswith("END")
+
+
+def test_failed_migration_rolls_back_ddl_and_version_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def boom(*_args: object, **_kwargs: object) -> str:
+        raise RuntimeError("injected failure")
+
+    monkeypatch.setattr(connection_mod, "format_utc", boom)
+    db_path = tmp_path / "planner.sqlite"
+    with pytest.raises(RuntimeError, match="injected failure"):
+        open_connection(db_path)
+    probe = sqlite3.connect(str(db_path))
+    try:
+        tables = {
+            row[0]
+            for row in probe.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        assert "days" not in tables
+        assert "schema_migrations" not in tables
+    finally:
+        probe.close()
+
+
 def test_second_open_does_not_rerun_init(db_path: Path) -> None:
     first = SqliteUnitOfWork.open(db_path)
     first.close()
@@ -289,6 +337,7 @@ def test_begin_immediate_only_lives_in_uow_transaction() -> None:
             assert "isolation_level" not in text
     conn_src = inspect.getsource(connection_mod)
     assert "BEGIN IMMEDIATE" not in conn_src
+    assert ".executescript" not in inspect.getsource(connection_mod.apply_migrations)
 
 
 def test_same_task_second_open_schedule_conflicts(
