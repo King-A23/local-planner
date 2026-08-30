@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import replace
 from datetime import date
@@ -24,6 +25,11 @@ from local_planner.domain.models import (
 )
 from local_planner.domain.seal import seal_day as _seal_day
 from local_planner.domain.store import InMemoryUnitOfWork, UnitOfWork
+
+logger = logging.getLogger(__name__)
+
+# SQLite UNIQUE (day_date, sort_order) is not DEFERRABLE; stage through a gap first.
+_SORT_ORDER_TEMP = 100_000
 
 
 def _now(clock: Clock) -> str:
@@ -84,10 +90,8 @@ def _errand_on_writable_day(clock: Clock, uow: UnitOfWork, errand_id: ErrandId) 
 
 
 def _snapshot_is_sealed(clock: Clock, uow: UnitOfWork, day_date: CalendarDate) -> bool:
-    rec = uow.get_day(day_date)
-    if rec is not None:
-        return rec.status == "sealed"
-    return parse_calendar_date(day_date) < date.fromisoformat(clock.today())
+    """Past days and sealed rows are immutable, matching `is_day_writable`."""
+    return not is_day_writable(clock, uow, day_date)
 
 
 def open_day(clock: Clock, uow: UnitOfWork, d: CalendarDate) -> DayPlan:
@@ -166,6 +170,11 @@ def schedule_to_date(
         if is_day_writable(clock, uow, current):
             uow.delete_entry(current, task_id)
         else:
+            logger.error(
+                "current_scheduled_date points at sealed/past day task_id=%s date=%s",
+                task_id,
+                current,
+            )
             raise Conflict("排期指向已封印日")
     ensure_open_day(uow, iso)
     uow.save_task(replace(task, current_scheduled_date=iso))
@@ -334,9 +343,15 @@ def reorder_todos(
     current = [e.task_id for e in uow.list_entries(iso)]
     if set(task_ids) != set(current) or len(task_ids) != len(current):
         raise Conflict("排序与当天条目不一致")
+    staged: list[tuple[int, DayTaskEntry]] = []
     for i, task_id in enumerate(task_ids):
         entry = uow.get_entry(iso, task_id)
-        assert entry is not None
+        if entry is None:
+            raise Conflict("排序与当天条目不一致")
+        staged.append((i, entry))
+    for i, entry in staged:
+        uow.save_entry(replace(entry, sort_order=i + _SORT_ORDER_TEMP))
+    for i, entry in staged:
         uow.save_entry(replace(entry, sort_order=i))
     return open_day(clock, uow, iso)
 
@@ -348,9 +363,15 @@ def reorder_errands(
     current = [e.id for e in uow.list_errands(iso)]
     if set(errand_ids) != set(current) or len(errand_ids) != len(current):
         raise Conflict("排序与当天条目不一致")
+    staged: list[tuple[int, Errand]] = []
     for i, errand_id in enumerate(errand_ids):
         errand = uow.get_errand(errand_id)
-        assert errand is not None
+        if errand is None:
+            raise Conflict("排序与当天条目不一致")
+        staged.append((i, errand))
+    for i, errand in staged:
+        uow.save_errand(replace(errand, sort_order=i + _SORT_ORDER_TEMP))
+    for i, errand in staged:
         uow.save_errand(replace(errand, sort_order=i))
     return open_day(clock, uow, iso)
 

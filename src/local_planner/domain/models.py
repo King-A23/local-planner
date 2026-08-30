@@ -67,7 +67,7 @@ class Task:
 
 @dataclass(frozen=True)
 class DayTaskEntry:
-    """A task's appearance on one day. Frozen after that day is sealed."""
+    """A task's appearance on one day. Sealed/past days must not update this snapshot."""
 
     day_date: CalendarDate
     task_id: TaskId

@@ -61,6 +61,8 @@ class InMemoryUnitOfWork:
         self._days: dict[CalendarDate, DayRecord] = {}
         self._entries: dict[tuple[CalendarDate, TaskId], DayTaskEntry] = {}
         self._errands: dict[ErrandId, Errand] = {}
+        self._task_seq = 0
+        self._task_order: dict[TaskId, int] = {}
 
     @contextmanager
     def transaction(self) -> Iterator[None]:
@@ -70,10 +72,14 @@ class InMemoryUnitOfWork:
         return self._tasks.get(task_id)
 
     def save_task(self, task: Task) -> None:
+        if task.id not in self._task_order:
+            self._task_seq += 1
+            self._task_order[task.id] = self._task_seq
         self._tasks[task.id] = task
 
     def delete_task_row(self, task_id: TaskId) -> None:
         self._tasks.pop(task_id, None)
+        self._task_order.pop(task_id, None)
 
     def get_day(self, d: CalendarDate) -> DayRecord | None:
         return self._days.get(d)
@@ -121,7 +127,10 @@ class InMemoryUnitOfWork:
             for t in self._tasks.values()
             if t.completed_at is None and t.current_scheduled_date is None
         ]
-        items.sort(key=lambda t: t.created_at, reverse=True)
+        items.sort(
+            key=lambda t: (t.created_at, self._task_order.get(t.id, 0)),
+            reverse=True,
+        )
         return items
 
     def _reject_second_open_schedule(self, entry: DayTaskEntry) -> None:

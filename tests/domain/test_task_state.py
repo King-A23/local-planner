@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import replace
 
 import pytest
@@ -374,3 +375,45 @@ def test_seal_day_is_idempotent(planner: Planner) -> None:
     second = planner.open_day(TODAY)
     assert first.status == second.status == "sealed"
     assert first.sealed_at == second.sealed_at
+
+
+def test_rename_and_delete_do_not_touch_past_open_day_without_seal() -> None:
+    """Clock advance without seal_day: past snapshots stay read-only."""
+    clock = FrozenClock(FROZEN)
+    planner = Planner(clock=clock)
+    plan = planner.add_todo_on_day(TODAY, "旧标题")
+    tid = _tid(plan)
+    clock.set("2026-08-31T12:00:00+08:00")
+    rec = planner.uow.get_day(TODAY)
+    assert rec is not None and rec.status == "open"
+    planner.rename_task(tid, "新标题")
+    assert planner.open_day(TODAY).todos[0].title_snapshot == "旧标题"
+    assert planner.get_task(tid).title == "新标题"
+    with pytest.raises(Conflict, match="过去的某一天还记着它"):
+        planner.delete_task(tid)
+    with pytest.raises(DaySealed):
+        planner.add_todo_on_day(TODAY, "补写")
+    assert planner.open_day(TODAY).todos[0].task_id == tid
+
+
+def test_inventory_lists_newest_first_when_created_at_ties(planner: Planner) -> None:
+    first = planner.add_to_inventory("first")
+    second = planner.add_to_inventory("second")
+    third = planner.add_to_inventory("third")
+    assert first.task.created_at == second.task.created_at == third.task.created_at
+    assert _inv_titles(planner) == ["third", "second", "first"]
+
+
+def test_schedule_from_sealed_pointer_logs_and_conflicts(
+    planner: Planner, caplog: pytest.LogCaptureFixture
+) -> None:
+    plan = planner.add_todo_on_day(TODAY, "异常指针")
+    tid = _tid(plan)
+    planner.seal_day(TODAY)
+    task = planner.get_task(tid)
+    planner.uow.save_task(replace(task, current_scheduled_date=TODAY))
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(Conflict, match="排期指向已封印日"):
+            planner.schedule_to_date(tid, FUTURE)
+    assert tid in caplog.text
+    assert TODAY in caplog.text
