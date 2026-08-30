@@ -104,8 +104,8 @@ def test_frontend_does_not_use_utc_date_strings() -> None:
     assert "src/constants.ts" in vite
     assert "transformIndexHtml" in vite
     day_view = (src / "DayView.tsx").read_text(encoding="utf-8")
-    assert "回车即加入今天" in day_view
-    assert "回车即加入这一天" in day_view
+    assert "<h2>Plan</h2>" in day_view
+    assert "<h2>Errands</h2>" in day_view
     files = list(src.rglob("*.ts")) + list(src.rglob("*.tsx"))
     assert files
     for path in files:
@@ -120,8 +120,8 @@ def test_day_view_has_errand_column_not_on_inventory() -> None:
     api = (src / "api.ts").read_text(encoding="utf-8")
     day_view = (src / "DayView.tsx").read_text(encoding="utf-8")
     app = (src / "App.tsx").read_text(encoding="utf-8")
-    assert "零碎差事" in day_view
-    assert "已作废" in day_view
+    assert "<h2>Errands</h2>" in day_view
+    assert "Expired" in day_view
     assert "addErrandOnDay" in day_view
     assert "completeErrand" in day_view
     assert "uncompleteErrand" in day_view
@@ -132,6 +132,7 @@ def test_day_view_has_errand_column_not_on_inventory() -> None:
     assert "/api/calendar" not in day_view
     assert "ListInventory" not in day_view
     assert "零碎差事" not in app
+    assert "<h2>Errands</h2>" not in app
     assert "errand" not in app.lower()
     assert "InventoryPage" in app
     assert "未排期的正经待办将出现在这里" not in app
@@ -211,12 +212,12 @@ def test_inventory_schedule_and_inline_add_ui() -> None:
     assert "InventoryPage" in app
     assert "onInventoryChange={refreshMeta}" in app
 
-    assert "从库存添加" in day_view
-    assert "排到这一天" in day_view
-    assert "打开库存" in day_view
+    assert "From To Do" in day_view
+    assert "Add" in day_view
+    assert "To Do →" in day_view
     assert 'handleNavClick(event, "/inventory")' in day_view
-    assert "移回库存" in day_view
-    assert "改排到另一天" in day_view
+    assert "Move to To Do" in day_view
+    assert "Reschedule" in day_view
     assert "INVENTORY_INLINE_LIMIT" in day_view
     assert "items.slice(0, INVENTORY_INLINE_LIMIT)" in day_view
     assert "plan.writable" in day_view
@@ -225,14 +226,14 @@ def test_inventory_schedule_and_inline_add_ui() -> None:
     assert 'role="dialog"' not in day_view
     assert "modal" not in day_view.lower()
 
-    assert "库存 · 未排期" in inventory
-    assert "排到今天" in inventory
-    assert "排到某天" in inventory
-    assert "记一条还不定哪天做的事" in inventory
+    assert "<h1>To Do</h1>" in inventory
+    assert "Today" in inventory
+    assert 'label="Later"' in inventory
     assert "addToInventory" in inventory
     assert "scheduleTask" in inventory
     assert 'role="dialog"' not in inventory
     assert "零碎差事" not in inventory
+    assert "<h2>Errands</h2>" not in inventory
     assert "errand" not in inventory.lower()
     assert "new Date(" not in inventory
     assert "new Date(" not in date_pick
@@ -253,8 +254,8 @@ def test_reorder_ui_uses_existing_order_apis() -> None:
     assert "/api/days/${date}/errands/order" in api
     assert "reorderTodos(plan.date, ids)" in day_view
     assert "reorderErrands(plan.date, ids)" in day_view
-    assert 'aria-label="上移"' in day_view
-    assert 'aria-label="下移"' in day_view
+    assert 'aria-label="Move up"' in day_view
+    assert 'aria-label="Move down"' in day_view
     assert "onMoveTodo" in day_view
     assert "onMoveErrand" in day_view
     assert "reorderTodos" not in inventory

@@ -36,37 +36,6 @@ type DayViewProps = {
   onInventoryChange?: () => void;
 };
 
-function emptyCopy(plan: DayPlan): string {
-  if (plan.isToday) {
-    return "写下今天要做的事，或从库存抽几条";
-  }
-  if (plan.isFuture) {
-    return "预排这一天";
-  }
-  return "这一天没有记录";
-}
-
-function addPlaceholder(plan: DayPlan): string {
-  if (plan.isToday) {
-    return "写下一条正经待办，回车即加入今天";
-  }
-  return "写下一条正经待办，回车即加入这一天";
-}
-
-function errandEmptyCopy(plan: DayPlan): string {
-  if (plan.isPast) {
-    return "这一天没有差事";
-  }
-  return "记下随手要办、当天作废的差事";
-}
-
-function errandPlaceholder(plan: DayPlan): string {
-  if (plan.isToday) {
-    return "写下一条零碎差事，回车即加入今天";
-  }
-  return "写下一条零碎差事，回车即加入这一天";
-}
-
 function isVoidedErrand(errand: Errand, writable: boolean): boolean {
   return errand.status === "expired" || (!writable && errand.status !== "completed");
 }
@@ -425,9 +394,9 @@ export function DayView({
         </a>
         <h1 className="day-heading">
           <span>{formatDayHeading(plan.date)}</span>
-          {plan.isToday ? <span className="badge">今天</span> : null}
-          {plan.isPast ? <span className="badge">只读</span> : null}
-          {plan.isFuture ? <span className="badge">未来</span> : null}
+          {plan.isToday ? <span className="badge">Today</span> : null}
+          {plan.isPast ? <span className="badge">Read-only</span> : null}
+          {plan.isFuture ? <span className="badge">Future</span> : null}
         </h1>
         <a
           className="day-arrow"
@@ -443,10 +412,8 @@ export function DayView({
       ) : null}
       {error ? <p className="error">{error}</p> : null}
       <section className="column">
-        <h2>正经待办</h2>
-        {plan.todos.length === 0 ? (
-          <p className="muted">{emptyCopy(plan)}</p>
-        ) : (
+        <h2>Plan</h2>
+        {plan.todos.length === 0 ? null : (
           <ul className="todos">
             {plan.todos.map((todo, index) => (
               <TodoRow
@@ -471,8 +438,7 @@ export function DayView({
             <input
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
-              placeholder={addPlaceholder(plan)}
-              aria-label="新的正经待办"
+              aria-label="Plan"
               maxLength={200}
             />
           </form>
@@ -486,10 +452,8 @@ export function DayView({
         ) : null}
       </section>
       <section className="column">
-        <h2>零碎差事</h2>
-        {plan.errands.length === 0 ? (
-          <p className="muted">{errandEmptyCopy(plan)}</p>
-        ) : (
+        <h2>Errands</h2>
+        {plan.errands.length === 0 ? null : (
           <ul className="todos">
             {plan.errands.map((errand, index) => (
               <ErrandRow
@@ -511,8 +475,7 @@ export function DayView({
             <input
               value={errandDraft}
               onChange={(event) => setErrandDraft(event.target.value)}
-              placeholder={errandPlaceholder(plan)}
-              aria-label="新的零碎差事"
+              aria-label="Errands"
               maxLength={200}
             />
           </form>
@@ -618,19 +581,19 @@ function TodoRow({
                 type="button"
                 className="linkish quiet"
                 disabled={index === 0}
-                aria-label="上移"
+                aria-label="Move up"
                 onClick={() => onMove(todo, -1)}
               >
-                上移
+                Up
               </button>
               <button
                 type="button"
                 className="linkish quiet"
                 disabled={index === count - 1}
-                aria-label="下移"
+                aria-label="Move down"
                 onClick={() => onMove(todo, 1)}
               >
-                下移
+                Down
               </button>
             </>
           ) : null}
@@ -641,10 +604,10 @@ function TodoRow({
                 className="linkish quiet"
                 onClick={() => onUnschedule(todo)}
               >
-                移回库存
+                Move to To Do
               </button>
               <DatePickButton
-                label="改排到另一天"
+                label="Reschedule"
                 min={today}
                 max={maxWritableDate(today)}
                 onPick={(nextDate) => onReschedule(todo, nextDate)}
@@ -652,7 +615,7 @@ function TodoRow({
             </>
           ) : null}
           <button type="button" className="linkish" onClick={() => onDelete(todo)}>
-            删除
+            Delete
           </button>
         </span>
       ) : null}
@@ -672,7 +635,7 @@ function InventoryAddBlock({
   const shown = items.slice(0, INVENTORY_INLINE_LIMIT);
   return (
     <div className="inventory-add">
-      <h3>从库存添加</h3>
+      <h3>From To Do</h3>
       {error ? <p className="error">{error}</p> : null}
       {shown.length > 0 ? (
         <ul className="inventory-inline">
@@ -684,7 +647,7 @@ function InventoryAddBlock({
                 className="linkish quiet"
                 onClick={() => onSchedule(item)}
               >
-                排到这一天
+                Add
               </button>
             </li>
           ))}
@@ -695,7 +658,7 @@ function InventoryAddBlock({
         href="/inventory"
         onClick={(event) => handleNavClick(event, "/inventory")}
       >
-        打开库存 →
+        To Do →
       </a>
     </div>
   );
@@ -752,7 +715,7 @@ function ErrandRow({
   return (
     <li className={className}>
       {voided ? (
-        <span className="badge">已作废</span>
+        <span className="badge">Expired</span>
       ) : (
         <input
           type="checkbox"
@@ -805,19 +768,19 @@ function ErrandRow({
                 type="button"
                 className="linkish quiet"
                 disabled={index === 0}
-                aria-label="上移"
+                aria-label="Move up"
                 onClick={() => onMove(errand, -1)}
               >
-                上移
+                Up
               </button>
               <button
                 type="button"
                 className="linkish quiet"
                 disabled={index === count - 1}
-                aria-label="下移"
+                aria-label="Move down"
                 onClick={() => onMove(errand, 1)}
               >
-                下移
+                Down
               </button>
             </>
           ) : null}
@@ -827,7 +790,7 @@ function ErrandRow({
               className="linkish"
               onClick={() => onDelete(errand)}
             >
-              删除
+              Delete
             </button>
           ) : null}
         </span>

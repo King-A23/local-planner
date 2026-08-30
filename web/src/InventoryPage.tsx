@@ -84,11 +84,9 @@ export function InventoryPage({
 
   return (
     <main className="page">
-      <h1>库存 · 未排期</h1>
+      <h1>To Do</h1>
       {error ? <p className="error">{error}</p> : null}
-      {items.length === 0 ? (
-        <p className="muted">还没有未排期的正经待办</p>
-      ) : (
+      {items.length === 0 ? null : (
         <ul className="inventory-list">
           {items.map((item) => (
             <li key={item.taskId} className="inventory-item">
@@ -101,10 +99,10 @@ export function InventoryPage({
                     void mutate(() => scheduleTask(item.taskId, today))
                   }
                 >
-                  排到今天
+                  Today
                 </button>
                 <DatePickButton
-                  label="排到某天…"
+                  label="Later"
                   min={today}
                   max={maxDate}
                   onPick={(date) =>
@@ -116,7 +114,7 @@ export function InventoryPage({
                   className="linkish"
                   onClick={() => void mutate(() => deleteTask(item.taskId))}
                 >
-                  删除
+                  Delete
                 </button>
               </span>
             </li>
@@ -127,8 +125,7 @@ export function InventoryPage({
         <input
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
-          placeholder="记一条还不定哪天做的事"
-          aria-label="新的库存待办"
+          aria-label="To Do"
           maxLength={200}
         />
       </form>

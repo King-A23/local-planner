@@ -27,10 +27,10 @@ export function Shell({
         </a>
         <nav className="nav">
           <a href="/" onClick={(e) => handleNavClick(e, "/")}>
-            今天
+            Today
           </a>
           <a href="/inventory" onClick={(e) => handleNavClick(e, "/inventory")}>
-            库存
+            To Do
             {inventoryCount ? (
               <span className="badge count">{inventoryCount}</span>
             ) : null}
@@ -43,7 +43,7 @@ export function Shell({
             disabled={!today}
             onClick={() => setCalOpen((open) => !open)}
           >
-            日期
+            Calendar
           </button>
           {calOpen && today ? (
             <MonthCalendar

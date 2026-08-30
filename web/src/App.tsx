@@ -71,7 +71,7 @@ export function App() {
         <h1>找不到该页</h1>
         <p>
           <a href="/" onClick={(e) => handleNavClick(e, "/")}>
-            回到今天
+            Today
           </a>
         </p>
       </main>
