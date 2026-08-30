@@ -136,17 +136,18 @@ export function DayView({
     return () => {
       cancelled = true;
     };
-  }, [date, plan?.writable]);
+  }, [date, plan?.writable, serverToday]);
 
   async function apply(
     work: () => Promise<DayPlan | void>,
-  ): Promise<void> {
+  ): Promise<boolean> {
     try {
       const next = await work();
       if (next) {
         setPlan(next);
       }
       setError(null);
+      return true;
     } catch (err: unknown) {
       setError(errorMessage(err));
       if (err instanceof ApiError && err.error === "DaySealed") {
@@ -157,6 +158,7 @@ export function DayView({
           // keep DaySealed message from the write
         }
       }
+      return false;
     }
   }
 
@@ -233,9 +235,13 @@ export function DayView({
   }
 
   async function refreshInventory(): Promise<void> {
-    const data = await listInventory();
-    setInventory(data.items);
-    setInventoryError(null);
+    try {
+      const data = await listInventory();
+      setInventory(data.items);
+      setInventoryError(null);
+    } catch (err: unknown) {
+      setInventoryError(errorMessage(err));
+    }
   }
 
   function dropTodo(taskId: string): void {
@@ -253,12 +259,17 @@ export function DayView({
     if (!plan?.writable || todo.completedOnDay) {
       return;
     }
-    void apply(async () => {
-      await unscheduleTask(todo.taskId);
-      dropTodo(todo.taskId);
-      await refreshInventory();
+    void (async () => {
+      const ok = await apply(async () => {
+        await unscheduleTask(todo.taskId);
+        dropTodo(todo.taskId);
+      });
+      if (!ok) {
+        return;
+      }
       onInventoryChange?.();
-    });
+      await refreshInventory();
+    })();
   }
 
   function onReschedule(todo: Todo, nextDate: string): void {
@@ -278,12 +289,19 @@ export function DayView({
     if (!plan?.writable) {
       return;
     }
-    void apply(async () => {
-      const next = await scheduleTask(item.taskId, plan.date);
-      await refreshInventory();
+    void (async () => {
+      const ok = await apply(async () =>
+        scheduleTask(item.taskId, plan.date),
+      );
+      if (!ok) {
+        return;
+      }
+      setInventory((current) =>
+        current.filter((row) => row.taskId !== item.taskId),
+      );
       onInventoryChange?.();
-      return next;
-    });
+      await refreshInventory();
+    })();
   }
 
   async function onAddErrand(event: FormEvent): Promise<void> {

@@ -221,6 +221,8 @@ def test_inventory_schedule_and_inline_add_ui() -> None:
     assert "INVENTORY_INLINE_LIMIT" in day_view
     assert "items.slice(0, INVENTORY_INLINE_LIMIT)" in day_view
     assert "plan.writable" in day_view
+    assert "[date, plan?.writable, serverToday]" in day_view
+    assert "scheduleTask(item.taskId, plan.date)" in day_view
     assert 'role="dialog"' not in day_view
     assert "modal" not in day_view.lower()
 
