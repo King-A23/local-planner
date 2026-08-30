@@ -39,8 +39,6 @@ export function App() {
         });
     }
     refresh();
-    // §6.6: poll updates meta.today only. `/` re-opens the new today;
-    // a parked `/d/昨天` stays on that URL and DayView re-reads OpenDay.
     const id = window.setInterval(refresh, META_POLL_MS);
     return () => {
       cancelled = true;
@@ -75,20 +73,19 @@ export function App() {
       </main>
     );
   } else if (route.kind === "today") {
-    if (metaError) {
+    if (!meta) {
       body = (
         <main className="page">
-          <p className="error">{metaError}</p>
-        </main>
-      );
-    } else if (!meta) {
-      body = (
-        <main className="page">
-          <p>加载中…</p>
+          {metaError ? <p className="error">{metaError}</p> : <p>加载中…</p>}
         </main>
       );
     } else {
-      body = <DayView date={meta.today} serverToday={meta.today} />;
+      body = (
+        <>
+          {metaError ? <p className="error">{metaError}</p> : null}
+          <DayView date={meta.today} serverToday={meta.today} />
+        </>
+      );
     }
   } else {
     body = <DayView date={route.date} serverToday={meta?.today} />;

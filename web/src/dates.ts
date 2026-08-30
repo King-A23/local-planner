@@ -79,7 +79,7 @@ export function formatCivil(year: number, month: number, day: number): string {
   return `${String(year).padStart(4, "0")}-${pad2(month)}-${pad2(day)}`;
 }
 
-/** Civil-day ±n via Y-M-D parts. Never string-slice the day field. */
+/** Civil-day ±n via Y-M-D parts. */
 export function addCivilDays(iso: string, delta: number): string {
   const parts = parseCivil(iso);
   if (!parts) {

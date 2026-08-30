@@ -179,6 +179,11 @@ def test_date_nav_calendar_readonly_and_midnight_poll() -> None:
     assert "history.replaceState" not in app
     assert "serverToday={meta?.today}" in app
     assert "serverToday={meta.today}" in app
+    assert "if (!meta)" in app
+    assert "if (metaError)" not in app
+    assert "§" not in app
+    assert "§" not in constants
+    assert "§" not in dates
 
     assert "MonthCalendar" in shell
     assert 'handleNavClick(e, "/")' in shell
