@@ -6,6 +6,21 @@
 
 ## 如何运行
 
+### macOS 桌面应用
+
+双击 `~/Applications/Local Planner.app` 打开独立桌面窗口。待办数据沿用原目录，退出窗口会自动停止桌面服务。已构建的应用包含 Python 与前端，日常使用无需终端。
+
+从源码构建安装：
+
+```bash
+.venv/bin/python -m pip install -e '.[dev]' -r desktop/macos/requirements-build.txt
+.venv/bin/python scripts/build_macos.py --install
+```
+
+需要 Xcode Command Line Tools、Python 3.12+ 和 Node.js。产物在 `dist/macos/`；已有同名应用时不会覆盖。[桌面版说明](docs/product/macos-desktop.md)包含更新方式、菜单快捷键、日志和分发限制。
+
+### 网页与命令行
+
 需要 Python 3.12+ 与 Node.js（构建前端）。
 
 ```bash
@@ -13,8 +28,12 @@ python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 cd web && npm ci && npm run build && cd ..
-python -m local_planner serve
+local-todo
 ```
+
+日常使用直接运行 `local-todo`：如果服务尚未启动，它会在后台启动服务，等待就绪后打开网页；如果已经启动，则直接打开，不会重复启动。`local-todo open` 与无参数形式等价。后台日志写入数据目录的 `server.log`。
+
+需要让服务留在当前终端查看实时日志时，使用 `local-todo serve`；原有的 `python -m local_planner serve` 与 `local-planner` 命令继续兼容。
 
 浏览器**只**打开启动日志里的地址：
 
@@ -26,7 +45,7 @@ http://127.0.0.1:8787
 
 生产 `serve` 同时提供 JSON API 与 `web/dist` SPA。缺 `web/dist/index.html` 时拒绝启动，并提示 `run npm run build`。
 
-换端口：`LOCAL_PLANNER_PORT` 或 `python -m local_planner serve --port 9000`。
+换端口：`local-todo --port 9000`、`LOCAL_PLANNER_PORT`，或 `python -m local_planner serve --port 9000`。
 
 默认数据文件：`~/Library/Application Support/local-planner/planner.sqlite`。覆盖目录：`LOCAL_PLANNER_DATA_DIR`（文件名仍是 `planner.sqlite`）。
 

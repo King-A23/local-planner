@@ -13,6 +13,8 @@ from local_planner.domain.models import (
     DayTaskEntry,
     Errand,
     ErrandId,
+    RecurrenceOccurrence,
+    RecurrenceSeries,
     Task,
     TaskId,
 )
@@ -68,8 +70,12 @@ class SqliteUnitOfWork:
 
     def get_task(self, task_id: TaskId) -> Task | None:
         row = self.conn.execute(
-            "SELECT id, title, created_at, current_scheduled_date, "
-            "completed_at, completed_on_date FROM tasks WHERE id = ?",
+            "SELECT t.id, t.title, t.created_at, t.current_scheduled_date, "
+            "t.completed_at, t.completed_on_date, t.target_date, t.discarded_at, "
+            "ro.series_id AS recurrence_series_id, "
+            "ro.occurrence_date AS recurrence_occurrence_date "
+            "FROM tasks t LEFT JOIN recurrence_occurrences ro "
+            "ON ro.kind = 'plan' AND ro.entity_id = t.id WHERE t.id = ?",
             (task_id,),
         ).fetchone()
         return None if row is None else _task_from_row(row)
@@ -79,14 +85,16 @@ class SqliteUnitOfWork:
             """
             INSERT INTO tasks (
               id, title, created_at, current_scheduled_date,
-              completed_at, completed_on_date
-            ) VALUES (?, ?, ?, ?, ?, ?)
+              completed_at, completed_on_date, target_date, discarded_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
               title = excluded.title,
               created_at = excluded.created_at,
               current_scheduled_date = excluded.current_scheduled_date,
               completed_at = excluded.completed_at,
-              completed_on_date = excluded.completed_on_date
+              completed_on_date = excluded.completed_on_date,
+              target_date = excluded.target_date,
+              discarded_at = excluded.discarded_at
             """,
             (
                 task.id,
@@ -95,6 +103,8 @@ class SqliteUnitOfWork:
                 task.current_scheduled_date,
                 task.completed_at,
                 task.completed_on_date,
+                task.target_date,
+                task.discarded_at,
             ),
         )
 
@@ -121,24 +131,39 @@ class SqliteUnitOfWork:
 
     def get_entry(self, day: CalendarDate, task_id: TaskId) -> DayTaskEntry | None:
         row = self.conn.execute(
-            "SELECT day_date, task_id, title_snapshot, sort_order, completed_on_day "
-            "FROM day_task_entries WHERE day_date = ? AND task_id = ?",
+            "SELECT e.day_date, e.task_id, e.title_snapshot, e.sort_order, "
+            "e.completed_on_day, e.start_clock, e.end_clock, "
+            "ro.series_id AS recurrence_series_id, "
+            "ro.occurrence_date AS recurrence_occurrence_date "
+            "FROM day_task_entries e LEFT JOIN recurrence_occurrences ro "
+            "ON ro.kind = 'plan' AND ro.entity_id = e.task_id "
+            "WHERE e.day_date = ? AND e.task_id = ?",
             (day, task_id),
         ).fetchone()
         return None if row is None else _entry_from_row(row)
 
     def list_entries(self, day: CalendarDate) -> list[DayTaskEntry]:
         rows = self.conn.execute(
-            "SELECT day_date, task_id, title_snapshot, sort_order, completed_on_day "
-            "FROM day_task_entries WHERE day_date = ? ORDER BY sort_order",
+            "SELECT e.day_date, e.task_id, e.title_snapshot, e.sort_order, "
+            "e.completed_on_day, e.start_clock, e.end_clock, "
+            "ro.series_id AS recurrence_series_id, "
+            "ro.occurrence_date AS recurrence_occurrence_date "
+            "FROM day_task_entries e LEFT JOIN recurrence_occurrences ro "
+            "ON ro.kind = 'plan' AND ro.entity_id = e.task_id "
+            "WHERE e.day_date = ? ORDER BY e.sort_order",
             (day,),
         ).fetchall()
         return [_entry_from_row(row) for row in rows]
 
     def list_entries_for_task(self, task_id: TaskId) -> list[DayTaskEntry]:
         rows = self.conn.execute(
-            "SELECT day_date, task_id, title_snapshot, sort_order, completed_on_day "
-            "FROM day_task_entries WHERE task_id = ? ORDER BY day_date, sort_order",
+            "SELECT e.day_date, e.task_id, e.title_snapshot, e.sort_order, "
+            "e.completed_on_day, e.start_clock, e.end_clock, "
+            "ro.series_id AS recurrence_series_id, "
+            "ro.occurrence_date AS recurrence_occurrence_date "
+            "FROM day_task_entries e LEFT JOIN recurrence_occurrences ro "
+            "ON ro.kind = 'plan' AND ro.entity_id = e.task_id "
+            "WHERE e.task_id = ? ORDER BY e.day_date, e.sort_order",
             (task_id,),
         ).fetchall()
         return [_entry_from_row(row) for row in rows]
@@ -148,12 +173,15 @@ class SqliteUnitOfWork:
         self.conn.execute(
             """
             INSERT INTO day_task_entries (
-              day_date, task_id, title_snapshot, sort_order, completed_on_day
-            ) VALUES (?, ?, ?, ?, ?)
+              day_date, task_id, title_snapshot, sort_order, completed_on_day,
+              start_clock, end_clock
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(day_date, task_id) DO UPDATE SET
               title_snapshot = excluded.title_snapshot,
               sort_order = excluded.sort_order,
-              completed_on_day = excluded.completed_on_day
+              completed_on_day = excluded.completed_on_day,
+              start_clock = excluded.start_clock,
+              end_clock = excluded.end_clock
             """,
             (
                 entry.day_date,
@@ -161,6 +189,8 @@ class SqliteUnitOfWork:
                 entry.title_snapshot,
                 entry.sort_order,
                 1 if entry.completed_on_day else 0,
+                entry.start_clock,
+                entry.end_clock,
             ),
         )
 
@@ -172,16 +202,25 @@ class SqliteUnitOfWork:
 
     def get_errand(self, errand_id: ErrandId) -> Errand | None:
         row = self.conn.execute(
-            "SELECT id, day_date, title, sort_order, status, completed_at "
-            "FROM errands WHERE id = ?",
+            "SELECT e.id, e.day_date, e.title, e.sort_order, e.status, "
+            "e.completed_at, e.start_clock, e.end_clock, "
+            "ro.series_id AS recurrence_series_id, "
+            "ro.occurrence_date AS recurrence_occurrence_date "
+            "FROM errands e LEFT JOIN recurrence_occurrences ro "
+            "ON ro.kind = 'errand' AND ro.entity_id = e.id WHERE e.id = ?",
             (errand_id,),
         ).fetchone()
         return None if row is None else _errand_from_row(row)
 
     def list_errands(self, day: CalendarDate) -> list[Errand]:
         rows = self.conn.execute(
-            "SELECT id, day_date, title, sort_order, status, completed_at "
-            "FROM errands WHERE day_date = ? ORDER BY sort_order",
+            "SELECT e.id, e.day_date, e.title, e.sort_order, e.status, "
+            "e.completed_at, e.start_clock, e.end_clock, "
+            "ro.series_id AS recurrence_series_id, "
+            "ro.occurrence_date AS recurrence_occurrence_date "
+            "FROM errands e LEFT JOIN recurrence_occurrences ro "
+            "ON ro.kind = 'errand' AND ro.entity_id = e.id "
+            "WHERE e.day_date = ? ORDER BY e.sort_order",
             (day,),
         ).fetchall()
         return [_errand_from_row(row) for row in rows]
@@ -190,14 +229,17 @@ class SqliteUnitOfWork:
         self.conn.execute(
             """
             INSERT INTO errands (
-              id, day_date, title, sort_order, status, completed_at
-            ) VALUES (?, ?, ?, ?, ?, ?)
+              id, day_date, title, sort_order, status, completed_at,
+              start_clock, end_clock
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
               day_date = excluded.day_date,
               title = excluded.title,
               sort_order = excluded.sort_order,
               status = excluded.status,
-              completed_at = excluded.completed_at
+              completed_at = excluded.completed_at,
+              start_clock = excluded.start_clock,
+              end_clock = excluded.end_clock
             """,
             (
                 errand.id,
@@ -206,6 +248,8 @@ class SqliteUnitOfWork:
                 errand.sort_order,
                 errand.status,
                 errand.completed_at,
+                errand.start_clock,
+                errand.end_clock,
             ),
         )
 
@@ -215,17 +259,164 @@ class SqliteUnitOfWork:
     def list_inventory_tasks(self) -> list[Task]:
         rows = self.conn.execute(
             """
-            SELECT id, title, created_at, current_scheduled_date,
-                   completed_at, completed_on_date
-            FROM tasks
-            WHERE completed_at IS NULL AND current_scheduled_date IS NULL
-            ORDER BY created_at DESC, rowid DESC
+            SELECT t.id, t.title, t.created_at, t.current_scheduled_date,
+                   t.completed_at, t.completed_on_date, t.target_date, t.discarded_at,
+                   ro.series_id AS recurrence_series_id,
+                   ro.occurrence_date AS recurrence_occurrence_date
+            FROM tasks t
+            LEFT JOIN recurrence_occurrences ro
+              ON ro.kind = 'plan' AND ro.entity_id = t.id
+            WHERE t.completed_at IS NULL AND t.current_scheduled_date IS NULL
+              AND t.discarded_at IS NULL
+            ORDER BY t.created_at DESC, t.rowid DESC
             """
         ).fetchall()
         return [_task_from_row(row) for row in rows]
 
+    def list_scheduled_after(self, today: CalendarDate) -> list[Task]:
+        rows = self.conn.execute(
+            """
+            SELECT t.id, t.title, t.created_at, t.current_scheduled_date,
+                   t.completed_at, t.completed_on_date, t.target_date, t.discarded_at,
+                   ro.series_id AS recurrence_series_id,
+                   ro.occurrence_date AS recurrence_occurrence_date
+            FROM tasks t
+            LEFT JOIN recurrence_occurrences ro
+              ON ro.kind = 'plan' AND ro.entity_id = t.id
+            WHERE t.completed_at IS NULL
+              AND t.current_scheduled_date IS NOT NULL
+              AND t.current_scheduled_date > ?
+            ORDER BY t.current_scheduled_date ASC, t.title ASC
+            """,
+            (today,),
+        ).fetchall()
+        return [_task_from_row(row) for row in rows]
+
+    def list_errands_after(self, today: CalendarDate) -> list[Errand]:
+        rows = self.conn.execute(
+            """
+            SELECT e.id, e.day_date, e.title, e.sort_order, e.status,
+                   e.completed_at, e.start_clock, e.end_clock,
+                   ro.series_id AS recurrence_series_id,
+                   ro.occurrence_date AS recurrence_occurrence_date
+            FROM errands e
+            LEFT JOIN recurrence_occurrences ro
+              ON ro.kind = 'errand' AND ro.entity_id = e.id
+            WHERE e.day_date > ?
+            ORDER BY e.day_date, e.sort_order, e.id
+            """,
+            (today,),
+        ).fetchall()
+        return [_errand_from_row(row) for row in rows]
+
+    def get_recurrence(self, series_id: str) -> RecurrenceSeries | None:
+        row = self.conn.execute(
+            "SELECT * FROM recurrence_series WHERE id = ?", (series_id,)
+        ).fetchone()
+        return None if row is None else _recurrence_from_row(row)
+
+    def list_recurrences(self) -> list[RecurrenceSeries]:
+        rows = self.conn.execute(
+            """
+            SELECT * FROM recurrence_series
+            WHERE deleted_at IS NULL
+            ORDER BY CASE state WHEN 'active' THEN 0 WHEN 'paused' THEN 1 ELSE 2 END,
+                     created_at, id
+            """
+        ).fetchall()
+        return [_recurrence_from_row(row) for row in rows]
+
+    def save_recurrence(self, series: RecurrenceSeries) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO recurrence_series (
+              id, kind, title, frequency, weekdays_mask, start_date, schedule_from,
+              default_start_clock, default_end_clock, state, created_at, updated_at,
+              paused_at, stopped_at, deleted_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              kind = excluded.kind,
+              title = excluded.title,
+              frequency = excluded.frequency,
+              weekdays_mask = excluded.weekdays_mask,
+              start_date = excluded.start_date,
+              schedule_from = excluded.schedule_from,
+              default_start_clock = excluded.default_start_clock,
+              default_end_clock = excluded.default_end_clock,
+              state = excluded.state,
+              created_at = excluded.created_at,
+              updated_at = excluded.updated_at,
+              paused_at = excluded.paused_at,
+              stopped_at = excluded.stopped_at,
+              deleted_at = excluded.deleted_at
+            """,
+            (
+                series.id,
+                series.kind,
+                series.title,
+                series.frequency,
+                series.weekdays_mask,
+                series.start_date,
+                series.schedule_from,
+                series.default_start_clock,
+                series.default_end_clock,
+                series.state,
+                series.created_at,
+                series.updated_at,
+                series.paused_at,
+                series.stopped_at,
+                series.deleted_at,
+            ),
+        )
+
+    def get_occurrence(
+        self, series_id: str, occurrence_date: CalendarDate
+    ) -> RecurrenceOccurrence | None:
+        row = self.conn.execute(
+            """
+            SELECT series_id, occurrence_date, kind, entity_id, disposition, generated_at
+            FROM recurrence_occurrences
+            WHERE series_id = ? AND occurrence_date = ?
+            """,
+            (series_id, occurrence_date),
+        ).fetchone()
+        return None if row is None else _occurrence_from_row(row)
+
+    def save_occurrence(self, occurrence: RecurrenceOccurrence) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO recurrence_occurrences (
+              series_id, occurrence_date, kind, entity_id, disposition, generated_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(series_id, occurrence_date) DO NOTHING
+            """,
+            (
+                occurrence.series_id,
+                occurrence.occurrence_date,
+                occurrence.kind,
+                occurrence.entity_id,
+                occurrence.disposition,
+                occurrence.generated_at,
+            ),
+        )
+
+    def get_planned_at(self, day: CalendarDate) -> str | None:
+        row = self.conn.execute(
+            "SELECT planned_at FROM day_planning WHERE day_date = ?", (day,)
+        ).fetchone()
+        return None if row is None else row["planned_at"]
+
+    def set_day_planned(self, day: CalendarDate, planned_at: str) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO day_planning (day_date, planned_at) VALUES (?, ?)
+            ON CONFLICT(day_date) DO UPDATE SET planned_at = excluded.planned_at
+            """,
+            (day, planned_at),
+        )
+
     def is_proven_empty(self) -> bool:
-        for table in ("days", "day_task_entries", "errands"):
+        for table in ("days", "day_task_entries", "errands", "recurrence_series"):
             row = self.conn.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone()
             if row is not None:
                 return False
@@ -243,6 +434,9 @@ class SqliteUnitOfWork:
               UNION ALL
               SELECT current_scheduled_date FROM tasks
               WHERE current_scheduled_date IS NOT NULL
+              UNION ALL
+              SELECT schedule_from FROM recurrence_series
+              WHERE deleted_at IS NULL
             )
             """
         ).fetchone()
@@ -259,6 +453,18 @@ def _task_from_row(row: sqlite3.Row) -> Task:
         current_scheduled_date=row["current_scheduled_date"],
         completed_at=row["completed_at"],
         completed_on_date=row["completed_on_date"],
+        target_date=row["target_date"] if "target_date" in row.keys() else None,
+        discarded_at=row["discarded_at"] if "discarded_at" in row.keys() else None,
+        series_id=(
+            row["recurrence_series_id"]
+            if "recurrence_series_id" in row.keys()
+            else None
+        ),
+        occurrence_date=(
+            row["recurrence_occurrence_date"]
+            if "recurrence_occurrence_date" in row.keys()
+            else None
+        ),
     )
 
 
@@ -277,6 +483,18 @@ def _entry_from_row(row: sqlite3.Row) -> DayTaskEntry:
         title_snapshot=row["title_snapshot"],
         sort_order=int(row["sort_order"]),
         completed_on_day=bool(row["completed_on_day"]),
+        start_clock=row["start_clock"] if "start_clock" in row.keys() else None,
+        end_clock=row["end_clock"] if "end_clock" in row.keys() else None,
+        series_id=(
+            row["recurrence_series_id"]
+            if "recurrence_series_id" in row.keys()
+            else None
+        ),
+        occurrence_date=(
+            row["recurrence_occurrence_date"]
+            if "recurrence_occurrence_date" in row.keys()
+            else None
+        ),
     )
 
 
@@ -288,4 +506,47 @@ def _errand_from_row(row: sqlite3.Row) -> Errand:
         sort_order=int(row["sort_order"]),
         status=row["status"],
         completed_at=row["completed_at"],
+        start_clock=row["start_clock"] if "start_clock" in row.keys() else None,
+        end_clock=row["end_clock"] if "end_clock" in row.keys() else None,
+        series_id=(
+            row["recurrence_series_id"]
+            if "recurrence_series_id" in row.keys()
+            else None
+        ),
+        occurrence_date=(
+            row["recurrence_occurrence_date"]
+            if "recurrence_occurrence_date" in row.keys()
+            else None
+        ),
+    )
+
+
+def _recurrence_from_row(row: sqlite3.Row) -> RecurrenceSeries:
+    return RecurrenceSeries(
+        id=row["id"],
+        kind=row["kind"],
+        title=row["title"],
+        frequency=row["frequency"],
+        weekdays_mask=int(row["weekdays_mask"]),
+        start_date=row["start_date"],
+        schedule_from=row["schedule_from"],
+        default_start_clock=row["default_start_clock"],
+        default_end_clock=row["default_end_clock"],
+        state=row["state"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+        paused_at=row["paused_at"],
+        stopped_at=row["stopped_at"],
+        deleted_at=row["deleted_at"] if "deleted_at" in row.keys() else None,
+    )
+
+
+def _occurrence_from_row(row: sqlite3.Row) -> RecurrenceOccurrence:
+    return RecurrenceOccurrence(
+        series_id=row["series_id"],
+        occurrence_date=row["occurrence_date"],
+        kind=row["kind"],
+        entity_id=row["entity_id"],
+        disposition=row["disposition"],
+        generated_at=row["generated_at"],
     )

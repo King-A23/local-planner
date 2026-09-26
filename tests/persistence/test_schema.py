@@ -49,6 +49,9 @@ def test_schema_v1_tables_indexes_triggers_and_meta(uow: SqliteUnitOfWork) -> No
         "tasks",
         "day_task_entries",
         "errands",
+        "recurrence_series",
+        "recurrence_occurrences",
+        "day_planning",
     } <= tables
     triggers = {
         row[0]
@@ -65,6 +68,9 @@ def test_schema_v1_tables_indexes_triggers_and_meta(uow: SqliteUnitOfWork) -> No
         "errands_no_delete_sealed",
         "days_no_unseal_or_mutate_sealed",
         "days_no_delete_sealed",
+        "day_planning_no_insert_sealed",
+        "day_planning_no_update_sealed",
+        "day_planning_no_delete_sealed",
     }
     indexes = {
         row[0]
@@ -78,10 +84,17 @@ def test_schema_v1_tables_indexes_triggers_and_meta(uow: SqliteUnitOfWork) -> No
         "idx_tasks_schedule",
         "idx_errands_day",
         "idx_entries_day",
+        "idx_recurrence_series_state",
+        "idx_recurrence_occurrence_entity",
     }
     assert uow.conn.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[
         0
-    ] == 1
+    ] == 6
+    columns = {
+        row[1]
+        for row in uow.conn.execute("PRAGMA table_info(recurrence_series)")
+    }
+    assert "deleted_at" in columns
     assert (
         uow.conn.execute("SELECT value FROM meta WHERE key = 'timezone'").fetchone()[0]
         == "Asia/Shanghai"
@@ -243,7 +256,7 @@ def test_second_open_does_not_rerun_init(db_path: Path) -> None:
     try:
         assert second.conn.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[
             0
-        ] == 1
+        ] == 6
     finally:
         second.close()
 
@@ -331,6 +344,9 @@ def test_begin_immediate_only_lives_in_uow_transaction() -> None:
         rel = path.relative_to(SRC_ROOT)
         if rel.parts[0] != "http":
             assert "PLANNER_LOCK" not in text, rel
+        if rel.parts[0] == "persistence":
+            assert "interprocess_lock" not in text, rel
+            assert "fcntl" not in text, rel
         if "BEGIN IMMEDIATE" in text:
             assert rel == Path("persistence") / "store.py"
         if path.parent.name == "domain":

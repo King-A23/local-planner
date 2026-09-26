@@ -16,16 +16,22 @@ def test_package_imports() -> None:
     assert __version__
 
 
-def test_help_exits_zero() -> None:
-    with pytest.raises(SystemExit) as excinfo:
-        main(["--help"])
-    assert excinfo.value.code == 0
+def test_help_exits_zero(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["--help"]) == 0
+    captured = capsys.readouterr()
+    assert "inventory list" in captured.out
+    assert "recurrence add --kind {plan,errand}" in captured.out
+    assert "recurrence pause|resume|stop SERIES_ID" in captured.out
 
 
 def test_unknown_command(capsys: pytest.CaptureFixture[str]) -> None:
-    assert main(["not-a-command"]) == 1
+    import json
+
+    assert main(["not-a-command"]) == 2
     captured = capsys.readouterr()
-    assert "未实现" in captured.err
+    payload = json.loads(captured.out)
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "UsageError"
 
 
 def test_readme_advertises_loopback_backup_reset_and_debug() -> None:
@@ -33,6 +39,8 @@ def test_readme_advertises_loopback_backup_reset_and_debug() -> None:
     assert "http://127.0.0.1:8787" in text
     assert "npm run build" in text
     assert "python -m local_planner serve" in text
+    assert "local-todo" in text
+    assert "local-todo serve" in text
     assert "python -m local_planner backup" in text
     assert "/api/debug" in text
     assert "planner.sqlite-wal" in text

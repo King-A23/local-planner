@@ -11,13 +11,10 @@ from fastapi.testclient import TestClient
 from local_planner.clock import FrozenClock, SystemClock
 from local_planner.domain.commands import Planner
 from local_planner.http.app import PLANNER_LOCK, _locked, create_app, health
-from local_planner.http.serve import (
-    data_dir,
-    resolve_clock,
-    serve,
-    uvicorn_run_kwargs,
-)
+from local_planner.http.serve import serve, uvicorn_run_kwargs
+from local_planner.paths import data_dir, resolve_clock
 from local_planner.persistence import SqliteUnitOfWork
+from local_planner.runtime import planner_txn
 
 TODAY = "2026-08-30"
 YESTERDAY = "2026-08-29"
@@ -105,15 +102,21 @@ def test_mutating_loopback_origin_allowed(client: TestClient) -> None:
     assert response.status_code == 200
 
 
-def test_vite_origin_only_in_dev(clock: FrozenClock, uow: SqliteUnitOfWork) -> None:
-    with _client(create_app(clock=clock, uow=uow, port=8787, dev=False)) as prod:
+def test_vite_origin_only_in_dev(
+    clock: FrozenClock, uow: SqliteUnitOfWork, tmp_path: Path
+) -> None:
+    with _client(
+        create_app(clock=clock, uow=uow, port=8787, dev=False, data_dir=tmp_path)
+    ) as prod:
         denied = prod.post(
             "/api/inventory/tasks",
             json={"title": "vite"},
             headers={"Origin": "http://127.0.0.1:5173"},
         )
         assert denied.status_code == 403
-    with _client(create_app(clock=clock, uow=uow, port=8787, dev=True)) as dev:
+    with _client(
+        create_app(clock=clock, uow=uow, port=8787, dev=True, data_dir=tmp_path)
+    ) as dev:
         allowed = dev.post(
             "/api/inventory/tasks",
             json={"title": "vite"},
@@ -143,10 +146,14 @@ def test_health_skips_settle(tmp_path: Path) -> None:
             plan = planner.add_errand(YESTERDAY, "过夜差事")
             eid = plan.errands[0].id
         clock.set("2026-08-30T12:00:00+08:00")
-        with _client(create_app(clock=clock, uow=uow, port=8787, dev=False)) as client:
+        with _client(
+            create_app(
+                clock=clock, uow=uow, port=8787, dev=False, data_dir=tmp_path
+            )
+        ) as client:
             health_response = client.get("/api/health")
             assert health_response.status_code == 200
-            assert health_response.json() == {"ok": True}
+            assert health_response.json() == {"ok": True, "service": "local-planner"}
             assert uow.get_day(YESTERDAY).status == "open"
             assert uow.get_errand(eid).status == "open"
             meta = client.get("/api/meta")
@@ -162,17 +169,20 @@ def test_health_source_has_no_lock_or_settle() -> None:
     source = inspect.getsource(health)
     assert "ensure_settled" not in source
     assert "PLANNER_LOCK" not in source
+    assert "interprocess_lock" not in source
     assert "transaction" not in source
 
 
 def test_locked_path_is_lock_then_transaction_then_settle() -> None:
     source = inspect.getsource(_locked)
     assert "PLANNER_LOCK" in source
-    lock_at = source.index("PLANNER_LOCK")
-    tx_at = source.index("transaction()")
-    settle_at = source.index("ensure_settled")
-    today_at = source.index("clock.today()")
-    assert lock_at < tx_at < settle_at < today_at
+    assert source.index("PLANNER_LOCK") < source.index("interprocess_lock")
+    txn_src = inspect.getsource(planner_txn)
+    assert (
+        txn_src.index("transaction()")
+        < txn_src.index("ensure_settled")
+        < txn_src.index("clock.today()")
+    )
     assert type(PLANNER_LOCK).__name__ == "lock"
 
 

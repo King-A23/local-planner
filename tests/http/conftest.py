@@ -31,8 +31,10 @@ def uow(tmp_path: Path) -> Iterator[SqliteUnitOfWork]:
 
 
 @pytest.fixture
-def app(clock: FrozenClock, uow: SqliteUnitOfWork):
-    return create_app(clock=clock, uow=uow, port=8787, dev=False)
+def app(clock: FrozenClock, uow: SqliteUnitOfWork, tmp_path: Path):
+    return create_app(
+        clock=clock, uow=uow, port=8787, dev=False, data_dir=tmp_path
+    )
 
 
 @pytest.fixture

@@ -4,6 +4,8 @@ export type Route =
   | { kind: "today" }
   | { kind: "day"; date: string }
   | { kind: "inventory" }
+  | { kind: "recurrences" }
+  | { kind: "todayPlanning" }
   | { kind: "notfound" };
 
 const DAY_PATH = /^\/d\/([^/]+)$/;
@@ -14,6 +16,12 @@ export function parseRoute(pathname: string): Route {
   }
   if (pathname === "/inventory") {
     return { kind: "inventory" };
+  }
+  if (pathname === "/recurrences") {
+    return { kind: "recurrences" };
+  }
+  if (pathname === "/planning/today") {
+    return { kind: "todayPlanning" };
   }
   const match = DAY_PATH.exec(pathname);
   if (match) {

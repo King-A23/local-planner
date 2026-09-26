@@ -1,0 +1,166 @@
+"""Domain argv parser. Process commands (serve/backup) are not parsed here."""
+
+from __future__ import annotations
+
+import argparse
+
+from local_planner.cli.envelope import UsageError
+
+
+class DomainParser(argparse.ArgumentParser):
+    def __init__(self, *args: object, envelope_command: str | None = None, **kwargs: object) -> None:
+        kwargs.setdefault("add_help", True)
+        super().__init__(*args, **kwargs)
+        self.envelope_command = envelope_command
+
+    def error(self, message: str) -> None:
+        raise UsageError(message, command=self.envelope_command)
+
+    def exit(self, status: int = 0, message: str | None = None) -> None:
+        if status == 0:
+            raise SystemExit(0)
+        raise UsageError(
+            (message or "").strip() or "用法错误",
+            command=self.envelope_command,
+        )
+
+
+def _leaf(sub: argparse._SubParsersAction[DomainParser], name: str, envelope: str) -> DomainParser:
+    parser = sub.add_parser(name, envelope_command=envelope)
+    parser.envelope_command = envelope
+    parser.set_defaults(envelope_command=envelope)
+    return parser
+
+
+def build_domain_parser() -> DomainParser:
+    parser = DomainParser(
+        prog="python -m local_planner",
+        description="Local Planner agent CLI.",
+        envelope_command=None,
+    )
+    parser.add_argument("--pretty", action="store_true")
+    parser.add_argument("--human", action="store_true")
+    top = parser.add_subparsers(dest="top", required=True, parser_class=DomainParser)
+
+    _leaf(top, "meta", "meta")
+    _leaf(top, "context", "context")
+
+    calendar = _leaf(top, "calendar", "calendar")
+    calendar.add_argument("--from", dest="date_from", required=True)
+    calendar.add_argument("--to", dest="date_to", required=True)
+
+    day = _leaf(top, "day", "day.open")
+    day_sub = day.add_subparsers(dest="day_cmd", required=True, parser_class=DomainParser)
+
+    day_open = _leaf(day_sub, "open", "day.open")
+    day_open.add_argument("date", nargs="?", default="today")
+
+    todo = _leaf(day_sub, "todo", "day.todo.add")
+    todo_sub = todo.add_subparsers(dest="todo_cmd", required=True, parser_class=DomainParser)
+    todo_add = _leaf(todo_sub, "add", "day.todo.add")
+    todo_add.add_argument("date")
+    todo_add.add_argument("--title", required=True)
+    todo_add.add_argument("--start", dest="start_clock", default=None)
+    todo_add.add_argument("--end", dest="end_clock", default=None)
+    todo_complete = _leaf(todo_sub, "complete", "day.todo.complete")
+    todo_complete.add_argument("date")
+    todo_complete.add_argument("task_id")
+    todo_uncomplete = _leaf(todo_sub, "uncomplete", "day.todo.uncomplete")
+    todo_uncomplete.add_argument("date")
+    todo_uncomplete.add_argument("task_id")
+    todo_reorder = _leaf(todo_sub, "reorder", "day.todo.reorder")
+    todo_reorder.add_argument("date")
+    todo_reorder.add_argument("task_ids", nargs="*")
+
+    errand = _leaf(day_sub, "errand", "day.errand.add")
+    errand_sub = errand.add_subparsers(dest="errand_cmd", required=True, parser_class=DomainParser)
+    errand_add = _leaf(errand_sub, "add", "day.errand.add")
+    errand_add.add_argument("date")
+    errand_add.add_argument("--title", required=True)
+    errand_add.add_argument("--start", dest="start_clock", default=None)
+    errand_add.add_argument("--end", dest="end_clock", default=None)
+    errand_reorder = _leaf(errand_sub, "reorder", "day.errand.reorder")
+    errand_reorder.add_argument("date")
+    errand_reorder.add_argument("errand_ids", nargs="*")
+
+    inventory = _leaf(top, "inventory", "inventory.list")
+    inv_sub = inventory.add_subparsers(dest="inv_cmd", required=True, parser_class=DomainParser)
+    _leaf(inv_sub, "list", "inventory.list")
+    inv_add = _leaf(inv_sub, "add", "inventory.add")
+    inv_add.add_argument("--title", required=True)
+    inv_add.add_argument("--target-date", dest="target_date", default=None)
+
+    recurrence = _leaf(top, "recurrence", "recurrence.list")
+    recurrence_sub = recurrence.add_subparsers(
+        dest="recurrence_cmd", required=True, parser_class=DomainParser
+    )
+    _leaf(recurrence_sub, "list", "recurrence.list")
+    recurrence_add = _leaf(recurrence_sub, "add", "recurrence.add")
+    recurrence_add.add_argument("--kind", choices=("plan", "errand"), required=True)
+    recurrence_add.add_argument("--title", required=True)
+    recurrence_add.add_argument(
+        "--frequency", choices=("daily", "weekly"), required=True
+    )
+    recurrence_add.add_argument("--weekdays")
+    recurrence_add.add_argument("--start-date", required=True)
+    recurrence_add.add_argument("--start", dest="start_clock")
+    recurrence_add.add_argument("--end", dest="end_clock")
+    recurrence_update = _leaf(recurrence_sub, "update", "recurrence.update")
+    recurrence_update.add_argument("series_id")
+    recurrence_update.add_argument("--title", default=argparse.SUPPRESS)
+    recurrence_update.add_argument(
+        "--frequency", choices=("daily", "weekly"), default=argparse.SUPPRESS
+    )
+    recurrence_update.add_argument("--weekdays", default=argparse.SUPPRESS)
+    recurrence_update.add_argument("--start-date", default=argparse.SUPPRESS)
+    recurrence_update.add_argument("--start", dest="start_clock", default=argparse.SUPPRESS)
+    recurrence_update.add_argument("--end", dest="end_clock", default=argparse.SUPPRESS)
+    recurrence_update.add_argument("--clear-start", action="store_true")
+    recurrence_update.add_argument("--clear-end", action="store_true")
+    for action in ("pause", "resume", "stop", "delete"):
+        action_parser = _leaf(
+            recurrence_sub, action, f"recurrence.{action}"
+        )
+        action_parser.add_argument("series_id")
+
+    task = _leaf(top, "task", "task.schedule")
+    task_sub = task.add_subparsers(dest="task_cmd", required=True, parser_class=DomainParser)
+    task_sched = _leaf(task_sub, "schedule", "task.schedule")
+    task_sched.add_argument("task_id")
+    task_sched.add_argument("--date", required=True)
+    task_unsched = _leaf(task_sub, "unschedule", "task.unschedule")
+    task_unsched.add_argument("task_id")
+    task_rename = _leaf(task_sub, "rename", "task.rename")
+    task_rename.add_argument("task_id")
+    task_rename.add_argument("--title", required=True)
+    task_delete = _leaf(task_sub, "delete", "task.delete")
+    task_delete.add_argument("task_id")
+    task_target = _leaf(task_sub, "target", "task.target")
+    task_target.add_argument("task_id")
+    task_target.add_argument("--date", dest="target_date", default=None)
+    task_target.add_argument("--clear", action="store_true")
+    todo_time = _leaf(todo_sub, "time", "day.todo.time")
+    todo_time.add_argument("date")
+    todo_time.add_argument("task_id")
+    todo_time.add_argument("--start", dest="start_clock", default=argparse.SUPPRESS)
+    todo_time.add_argument("--end", dest="end_clock", default=argparse.SUPPRESS)
+
+    errand_top = _leaf(top, "errand", "errand.complete")
+    errand_top_sub = errand_top.add_subparsers(
+        dest="errand_top_cmd", required=True, parser_class=DomainParser
+    )
+    errand_complete = _leaf(errand_top_sub, "complete", "errand.complete")
+    errand_complete.add_argument("errand_id")
+    errand_uncomplete = _leaf(errand_top_sub, "uncomplete", "errand.uncomplete")
+    errand_uncomplete.add_argument("errand_id")
+    errand_rename = _leaf(errand_top_sub, "rename", "errand.rename")
+    errand_rename.add_argument("errand_id")
+    errand_rename.add_argument("--title", required=True)
+    errand_delete = _leaf(errand_top_sub, "delete", "errand.delete")
+    errand_delete.add_argument("errand_id")
+    errand_time = _leaf(errand_top_sub, "time", "errand.time")
+    errand_time.add_argument("errand_id")
+    errand_time.add_argument("--start", dest="start_clock", default=argparse.SUPPRESS)
+    errand_time.add_argument("--end", dest="end_clock", default=argparse.SUPPRESS)
+
+    return parser

@@ -9,6 +9,7 @@ from datetime import date
 
 from local_planner.clock import Clock, SystemClock, format_utc
 from local_planner.domain.errors import Conflict, DaySealed, NotFound
+from local_planner.domain.time import validate_clock_pair
 from local_planner.domain.models import (
     CalendarDate,
     DayPlan,
@@ -17,11 +18,26 @@ from local_planner.domain.models import (
     Errand,
     ErrandId,
     InventoryItem,
+    PlanningView,
+    RecurrenceSeries,
     Task,
     TaskId,
+    UpcomingDay,
+    add_calendar_days,
     check_year_cap,
     normalize_title,
     parse_calendar_date,
+)
+from local_planner.domain.recurrence import (
+    UNSET as RECURRENCE_UNSET,
+    create_recurrence as _create_recurrence,
+    delete_recurrence as _delete_recurrence,
+    materialize_occurrences_for_date,
+    pause_recurrence as _pause_recurrence,
+    recurrence_matches,
+    resume_recurrence as _resume_recurrence,
+    stop_recurrence as _stop_recurrence,
+    update_recurrence as _update_recurrence,
 )
 from local_planner.domain.seal import seal_day as _seal_day
 from local_planner.domain.store import InMemoryUnitOfWork, UnitOfWork
@@ -30,10 +46,19 @@ logger = logging.getLogger(__name__)
 
 # SQLite UNIQUE (day_date, sort_order) is not DEFERRABLE; stage through a gap first.
 _SORT_ORDER_TEMP = 100_000
+UNSET = object()
 
 
 def _now(clock: Clock) -> str:
     return format_utc(clock.now_utc())
+
+
+def _incoming_clock(current: str | None, incoming: object) -> str | None:
+    if incoming is UNSET:
+        return current
+    if incoming is None:
+        return None
+    return str(incoming)
 
 
 def _new_id() -> str:
@@ -58,6 +83,8 @@ def require_writable_day(clock: Clock, uow: UnitOfWork, d: CalendarDate) -> Cale
     parsed = parse_calendar_date(d)
     iso = parsed.isoformat()
     check_year_cap(iso, clock.today())
+    if iso >= clock.today():
+        materialize_occurrences_for_date(clock, uow, iso)
     if not is_day_writable(clock, uow, iso):
         raise DaySealed("这一天已封印，不能改", date=iso)
     return iso
@@ -94,7 +121,7 @@ def _snapshot_is_sealed(clock: Clock, uow: UnitOfWork, day_date: CalendarDate) -
     return not is_day_writable(clock, uow, day_date)
 
 
-def open_day(clock: Clock, uow: UnitOfWork, d: CalendarDate) -> DayPlan:
+def _read_day(clock: Clock, uow: UnitOfWork, d: CalendarDate) -> DayPlan:
     parsed = parse_calendar_date(d)
     iso = parsed.isoformat()
     rec = uow.get_day(iso)
@@ -112,15 +139,29 @@ def open_day(clock: Clock, uow: UnitOfWork, d: CalendarDate) -> DayPlan:
     )
 
 
+def open_day(clock: Clock, uow: UnitOfWork, d: CalendarDate) -> DayPlan:
+    parsed = parse_calendar_date(d)
+    iso = parsed.isoformat()
+    if iso >= clock.today():
+        materialize_occurrences_for_date(clock, uow, iso)
+    return _read_day(clock, uow, iso)
+
+
 def list_inventory(uow: UnitOfWork) -> list[InventoryItem]:
     return [InventoryItem(task=t) for t in uow.list_inventory_tasks()]
 
 
 def add_todo_on_day(
-    clock: Clock, uow: UnitOfWork, d: CalendarDate, title: str
+    clock: Clock,
+    uow: UnitOfWork,
+    d: CalendarDate,
+    title: str,
+    start_clock: str | None = None,
+    end_clock: str | None = None,
 ) -> DayPlan:
     iso = require_writable_day(clock, uow, d)
     title = normalize_title(title)
+    start_c, end_c = validate_clock_pair(start_clock, end_clock)
     ensure_open_day(uow, iso)
     task = Task(
         id=_new_id(),
@@ -137,13 +178,24 @@ def add_todo_on_day(
         title_snapshot=title,
         sort_order=_next_sort(uow.list_entries(iso)),
         completed_on_day=False,
+        start_clock=start_c,
+        end_clock=end_c,
     )
     uow.save_entry(entry)
     return open_day(clock, uow, iso)
 
 
-def add_to_inventory(clock: Clock, uow: UnitOfWork, title: str) -> InventoryItem:
+def add_to_inventory(
+    clock: Clock,
+    uow: UnitOfWork,
+    title: str,
+    target_date: str | None = None,
+) -> InventoryItem:
     title = normalize_title(title)
+    target = None
+    if target_date:
+        target = parse_calendar_date(target_date).isoformat()
+        check_year_cap(target, clock.today())
     task = Task(
         id=_new_id(),
         title=title,
@@ -151,6 +203,7 @@ def add_to_inventory(clock: Clock, uow: UnitOfWork, title: str) -> InventoryItem
         current_scheduled_date=None,
         completed_at=None,
         completed_on_date=None,
+        target_date=target,
     )
     uow.save_task(task)
     return InventoryItem(task=task)
@@ -187,6 +240,8 @@ def schedule_to_date(
                 title_snapshot=task.title,
                 sort_order=_next_sort(uow.list_entries(iso)),
                 completed_on_day=False,
+                series_id=task.series_id,
+                occurrence_date=task.occurrence_date,
             )
         )
     return open_day(clock, uow, iso)
@@ -205,6 +260,16 @@ def unschedule(clock: Clock, uow: UnitOfWork, task_id: TaskId) -> InventoryItem:
     updated = replace(task, current_scheduled_date=None)
     uow.save_task(updated)
     return InventoryItem(task=updated)
+
+
+def complete_inventory_task(clock: Clock, uow: UnitOfWork, task_id: TaskId) -> DayPlan:
+    """Complete an inventory task today, preserving the normal completion history."""
+    task = _require_task(uow, task_id)
+    if task.completed_at is not None or task.current_scheduled_date is not None:
+        raise Conflict("任务已完成或已排期，请刷新 To Do")
+    today = clock.today()
+    schedule_to_date(clock, uow, task_id, today)
+    return complete_task_on_day(clock, uow, task_id, today)
 
 
 def complete_task_on_day(
@@ -257,9 +322,17 @@ def uncomplete_task_on_day(
     return open_day(clock, uow, iso)
 
 
-def add_errand(clock: Clock, uow: UnitOfWork, d: CalendarDate, title: str) -> DayPlan:
+def add_errand(
+    clock: Clock,
+    uow: UnitOfWork,
+    d: CalendarDate,
+    title: str,
+    start_clock: str | None = None,
+    end_clock: str | None = None,
+) -> DayPlan:
     iso = require_writable_day(clock, uow, d)
     title = normalize_title(title)
+    start_c, end_c = validate_clock_pair(start_clock, end_clock)
     ensure_open_day(uow, iso)
     errand = Errand(
         id=_new_id(),
@@ -268,6 +341,8 @@ def add_errand(clock: Clock, uow: UnitOfWork, d: CalendarDate, title: str) -> Da
         sort_order=_next_sort(uow.list_errands(iso)),
         status="open",
         completed_at=None,
+        start_clock=start_c,
+        end_clock=end_c,
     )
     uow.save_errand(errand)
     return open_day(clock, uow, iso)
@@ -327,8 +402,19 @@ def rename_task(
 
 
 def delete_task(clock: Clock, uow: UnitOfWork, task_id: TaskId) -> None:
-    _require_task(uow, task_id)
+    task = _require_task(uow, task_id)
     entries = uow.list_entries_for_task(task_id)
+    in_todo = task.completed_at is None and task.current_scheduled_date is None
+    if in_todo:
+        for entry in entries:
+            if not _snapshot_is_sealed(clock, uow, entry.day_date):
+                uow.delete_entry(entry.day_date, task_id)
+        leftover = uow.list_entries_for_task(task_id)
+        if leftover:
+            uow.save_task(replace(task, discarded_at=_now(clock)))
+        else:
+            uow.delete_task_row(task_id)
+        return
     for entry in entries:
         if _snapshot_is_sealed(clock, uow, entry.day_date):
             raise Conflict("过去的某一天还记着它，不能删")
@@ -377,6 +463,207 @@ def reorder_errands(
     return open_day(clock, uow, iso)
 
 
+def set_target_date(
+    clock: Clock, uow: UnitOfWork, task_id: TaskId, raw_date: str | None
+) -> InventoryItem | DayPlan:
+    task = _require_task(uow, task_id)
+    if raw_date is None or not str(raw_date).strip():
+        updated = replace(task, target_date=None)
+    else:
+        iso = parse_calendar_date(str(raw_date)).isoformat()
+        check_year_cap(iso, clock.today())
+        updated = replace(task, target_date=iso)
+    uow.save_task(updated)
+    if updated.current_scheduled_date:
+        return open_day(clock, uow, updated.current_scheduled_date)
+    return InventoryItem(task=updated)
+
+
+def set_plan_clocks(
+    clock: Clock,
+    uow: UnitOfWork,
+    d: CalendarDate,
+    task_id: TaskId,
+    start_clock: str | None | object = UNSET,
+    end_clock: str | None | object = UNSET,
+) -> DayPlan:
+    iso = require_writable_day(clock, uow, d)
+    entry = uow.get_entry(iso, task_id)
+    if entry is None:
+        raise NotFound("这一天没有该任务")
+    start_c, end_c = validate_clock_pair(
+        _incoming_clock(entry.start_clock, start_clock),
+        _incoming_clock(entry.end_clock, end_clock),
+    )
+    uow.save_entry(replace(entry, start_clock=start_c, end_clock=end_c))
+    return open_day(clock, uow, iso)
+
+
+def set_errand_clocks(
+    clock: Clock,
+    uow: UnitOfWork,
+    errand_id: ErrandId,
+    start_clock: str | None | object = UNSET,
+    end_clock: str | None | object = UNSET,
+) -> DayPlan:
+    errand = _errand_on_writable_day(clock, uow, errand_id)
+    start_c, end_c = validate_clock_pair(
+        _incoming_clock(errand.start_clock, start_clock),
+        _incoming_clock(errand.end_clock, end_clock),
+    )
+    uow.save_errand(replace(errand, start_clock=start_c, end_clock=end_c))
+    return open_day(clock, uow, errand.day_date)
+
+
+def create_recurrence(
+    clock: Clock,
+    uow: UnitOfWork,
+    *,
+    kind: str,
+    title: str,
+    frequency: str,
+    weekdays: list[str] | None,
+    start_date: str,
+    default_start_clock: str | None = None,
+    default_end_clock: str | None = None,
+) -> RecurrenceSeries:
+    return _create_recurrence(
+        clock,
+        uow,
+        kind=kind,
+        title=title,
+        frequency=frequency,
+        weekdays=weekdays,
+        start_date=start_date,
+        default_start_clock=default_start_clock,
+        default_end_clock=default_end_clock,
+    )
+
+
+def update_recurrence(
+    clock: Clock,
+    uow: UnitOfWork,
+    series_id: str,
+    *,
+    title: str | object = RECURRENCE_UNSET,
+    frequency: str | object = RECURRENCE_UNSET,
+    weekdays: list[str] | None | object = RECURRENCE_UNSET,
+    start_date: str | object = RECURRENCE_UNSET,
+    default_start_clock: str | None | object = RECURRENCE_UNSET,
+    default_end_clock: str | None | object = RECURRENCE_UNSET,
+) -> RecurrenceSeries:
+    return _update_recurrence(
+        clock,
+        uow,
+        series_id,
+        title=title,
+        frequency=frequency,
+        weekdays=weekdays,
+        start_date=start_date,
+        default_start_clock=default_start_clock,
+        default_end_clock=default_end_clock,
+    )
+
+
+def list_recurrences(uow: UnitOfWork) -> list[RecurrenceSeries]:
+    return uow.list_recurrences()
+
+
+def pause_recurrence(
+    clock: Clock, uow: UnitOfWork, series_id: str
+) -> RecurrenceSeries:
+    return _pause_recurrence(clock, uow, series_id)
+
+
+def resume_recurrence(
+    clock: Clock, uow: UnitOfWork, series_id: str
+) -> RecurrenceSeries:
+    return _resume_recurrence(clock, uow, series_id)
+
+
+def stop_recurrence(
+    clock: Clock, uow: UnitOfWork, series_id: str
+) -> RecurrenceSeries:
+    return _stop_recurrence(clock, uow, series_id)
+
+
+def delete_recurrence(clock: Clock, uow: UnitOfWork, series_id: str) -> None:
+    _delete_recurrence(clock, uow, series_id)
+
+
+def open_planning_today(clock: Clock, uow: UnitOfWork) -> PlanningView:
+    today = clock.today()
+    plan = open_day(clock, uow, today)
+    inventory = list_inventory(uow)
+    inventory_by_id = {item.task.id: item for item in inventory}
+    yesterday = add_calendar_days(today, -1)
+    returned_ids = {
+        entry.task_id
+        for entry in uow.list_entries(yesterday)
+        if not entry.completed_on_day and entry.task_id in inventory_by_id
+    }
+    returned = [item for item in inventory if item.task.id in returned_ids]
+    due_ids = {
+        item.task.id
+        for item in inventory
+        if item.task.id not in returned_ids
+        and item.task.target_date is not None
+        and item.task.target_date <= today
+    }
+    due = [
+        item
+        for item in inventory
+        if item.task.id in due_ids
+    ]
+    remaining_inventory = [
+        item
+        for item in inventory
+        if item.task.id not in returned_ids and item.task.id not in due_ids
+    ]
+    upcoming: list[UpcomingDay] = []
+    for offset in range(1, 8):
+        d = add_calendar_days(today, offset)
+        entries = uow.list_entries(d)
+        errands = uow.list_errands(d)
+        todo_count = sum(1 for item in entries if item.series_id is None)
+        errand_count = sum(1 for item in errands if item.series_id is None)
+        recurrence_count = sum(1 for item in entries if item.series_id is not None)
+        recurrence_count += sum(
+            1 for item in errands if item.series_id is not None
+        )
+        for series in uow.list_recurrences():
+            if recurrence_matches(series, d) and uow.get_occurrence(series.id, d) is None:
+                recurrence_count += 1
+        if todo_count or errand_count or recurrence_count:
+            upcoming.append(
+                UpcomingDay(
+                    date=d,
+                    todo_count=todo_count,
+                    errand_count=errand_count,
+                    recurrence_count=recurrence_count,
+                )
+            )
+    planned_at = uow.get_planned_at(today)
+    return PlanningView(
+        date=today,
+        status="ready" if planned_at is not None else "unplanned",
+        planned_at=planned_at,
+        day=plan,
+        returned_from_yesterday=returned,
+        due=due,
+        inventory=remaining_inventory,
+        upcoming=upcoming,
+    )
+
+
+def complete_planning_today(clock: Clock, uow: UnitOfWork) -> PlanningView:
+    today = require_writable_day(clock, uow, clock.today())
+    ensure_open_day(uow, today)
+    if uow.get_planned_at(today) is None:
+        uow.set_day_planned(today, _now(clock))
+    return open_planning_today(clock, uow)
+
+
 class Planner:
     """Convenience wrapper for tests and later adapters."""
 
@@ -392,11 +679,21 @@ class Planner:
     def list_inventory(self) -> list[InventoryItem]:
         return list_inventory(self.uow)
 
-    def add_todo_on_day(self, d: CalendarDate, title: str) -> DayPlan:
-        return add_todo_on_day(self.clock, self.uow, d, title)
+    def add_todo_on_day(
+        self,
+        d: CalendarDate,
+        title: str,
+        start_clock: str | None = None,
+        end_clock: str | None = None,
+    ) -> DayPlan:
+        return add_todo_on_day(
+            self.clock, self.uow, d, title, start_clock, end_clock
+        )
 
-    def add_to_inventory(self, title: str) -> InventoryItem:
-        return add_to_inventory(self.clock, self.uow, title)
+    def add_to_inventory(
+        self, title: str, target_date: str | None = None
+    ) -> InventoryItem:
+        return add_to_inventory(self.clock, self.uow, title, target_date)
 
     def schedule_to_date(self, task_id: TaskId, d: CalendarDate) -> DayPlan:
         return schedule_to_date(self.clock, self.uow, task_id, d)
@@ -410,8 +707,14 @@ class Planner:
     def uncomplete_task_on_day(self, task_id: TaskId, d: CalendarDate) -> DayPlan:
         return uncomplete_task_on_day(self.clock, self.uow, task_id, d)
 
-    def add_errand(self, d: CalendarDate, title: str) -> DayPlan:
-        return add_errand(self.clock, self.uow, d, title)
+    def add_errand(
+        self,
+        d: CalendarDate,
+        title: str,
+        start_clock: str | None = None,
+        end_clock: str | None = None,
+    ) -> DayPlan:
+        return add_errand(self.clock, self.uow, d, title, start_clock, end_clock)
 
     def complete_errand(self, errand_id: ErrandId) -> DayPlan:
         return complete_errand(self.clock, self.uow, errand_id)

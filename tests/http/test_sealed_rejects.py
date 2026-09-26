@@ -47,7 +47,11 @@ def test_sealed_errand_complete_is_409_not_500(
             plan = planner.add_errand(TODAY, "封印差事")
             eid = plan.errands[0].id
             planner.seal_day(TODAY)
-        with _client(create_app(clock=clock, uow=uow, port=8787, dev=False)) as client:
+        with _client(
+            create_app(
+                clock=clock, uow=uow, port=8787, dev=False, data_dir=tmp_path
+            )
+        ) as client:
             with caplog.at_level(logging.INFO, logger="local_planner.http.app"):
                 complete = client.post(f"/api/errands/{eid}/complete")
             assert complete.status_code == 409
@@ -80,7 +84,11 @@ def test_expired_errand_uncomplete_is_conflict(tmp_path: Path) -> None:
             plan = planner.add_errand(YESTERDAY, "将作废")
             eid = plan.errands[0].id
         clock.set(FROZEN)
-        with _client(create_app(clock=clock, uow=uow, port=8787, dev=False)) as client:
+        with _client(
+            create_app(
+                clock=clock, uow=uow, port=8787, dev=False, data_dir=tmp_path
+            )
+        ) as client:
             client.get("/api/meta")
             assert uow.get_errand(eid).status == "expired"
             uncomplete = client.post(f"/api/errands/{eid}/uncomplete")
