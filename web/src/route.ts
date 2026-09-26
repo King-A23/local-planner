@@ -1,4 +1,5 @@
 import { isCivilDate } from "./dates";
+import { openDesktopSettings } from "./desktop";
 
 export type Route =
   | { kind: "today" }
@@ -35,6 +36,7 @@ export function parseRoute(pathname: string): Route {
 }
 
 export function navigate(href: string): void {
+  if (new URL(href, window.location.href).pathname === "/settings" && openDesktopSettings(href)) return;
   if (window.location.pathname === href) {
     return;
   }

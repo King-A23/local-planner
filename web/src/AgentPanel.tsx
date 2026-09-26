@@ -51,6 +51,7 @@ export function AgentPanel({ open, onClose, onOpen, triggerRef, surface, date, o
   const [dismissed, setDismissed] = useState<string | null>(null);
   const [environment, setEnvironment] = useState<LauncherCheck | null>(null);
   const [checking, setChecking] = useState(false);
+  const [configRevision, setConfigRevision] = useState(0);
   const promptRef = useRef<HTMLTextAreaElement>(null);
   const actionRef = useRef(false);
   const requestRef = useRef<{ key: string; id: string } | null>(null);
@@ -71,15 +72,17 @@ export function AgentPanel({ open, onClose, onOpen, triggerRef, surface, date, o
     }).catch(() => { if (!stopped) setEnvironment({ status: "unknown", message: "暂时无法检测环境，可在设置中重试。" }); })
       .finally(() => { if (!stopped) setChecking(false); });
     return () => { stopped = true; };
-  }, [open, selected, active]);
+  }, [open, selected, active, configRevision]);
 
   useEffect(() => {
-    const reload = () => {
+    const reload = (event: Event) => {
+      const choice = (event as CustomEvent<string | undefined>).detail;
       request<{ items: Launcher[] }>("/api/launchers").then(({ items }) => {
         setItems(items);
-        const saved = readPreference(SELECTION_KEY);
+        const saved = typeof choice === "string" ? choice : readPreference(SELECTION_KEY);
         setSelected(items.some((item) => item.id === saved) ? saved : items[0]?.id ?? "");
         setEnvironment(null);
+        setConfigRevision((revision) => revision + 1);
       }).catch((err) => setError(errorMessage(err)));
     };
     window.addEventListener("planner:launchers-changed", reload);

@@ -1,9 +1,12 @@
 import AppKit
 import WebKit
 
-final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate, WKScriptMessageHandler {
     private var window: NSWindow!
     private var webView: WKWebView!
+    private var settingsWindow: NSWindow?
+    private var settingsWebView: WKWebView?
+    private var pendingSettingsFragment: String?
     private var backend: Process?
     private let lifetime = Pipe()
     private var output: Pipe?
@@ -188,16 +191,87 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
               let port = url.port, (1...65535).contains(port) else { return }
         startupTimer?.invalidate()
         baseURL = url
-        let configuration = WKWebViewConfiguration()
-        configuration.websiteDataStore = .default()
-        webView = WKWebView(frame: window.contentView!.bounds, configuration: configuration)
-        webView.navigationDelegate = self
-        webView.uiDelegate = self
-        webView.autoresizingMask = [.width, .height]
+        webView = makeWebView(frame: window.contentView!.bounds, kind: "main")
         webView.allowsBackForwardNavigationGestures = true
         window.contentView = webView
         webView.load(URLRequest(url: url))
         window.makeFirstResponder(webView)
+    }
+
+    private func makeWebView(frame: NSRect, kind: String) -> WKWebView {
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .default()
+        configuration.userContentController.add(self, name: "plannerDesktop")
+        configuration.userContentController.addUserScript(WKUserScript(
+            source: "window.__PLANNER_DESKTOP_WINDOW__ = '\(kind)';",
+            injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        let view = WKWebView(frame: frame, configuration: configuration)
+        view.navigationDelegate = self
+        view.uiDelegate = self
+        view.autoresizingMask = [.width, .height]
+        return view
+    }
+
+    private func showSettings(fragment: String? = nil) {
+        guard let baseURL else { return }
+        if settingsWindow == nil {
+            let settings = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 720, height: 780),
+                                    styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                                    backing: .buffered, defer: false)
+            settings.title = "设置 · Local Planner"
+            settings.minSize = NSSize(width: 560, height: 520)
+            settings.isReleasedWhenClosed = false
+            settings.center()
+            settings.setFrameAutosaveName("LocalPlannerSettingsWindow")
+            let view = makeWebView(frame: settings.contentView!.bounds, kind: "settings")
+            settings.contentView = view
+            settingsWindow = settings
+            settingsWebView = view
+            pendingSettingsFragment = fragment
+            view.load(URLRequest(url: baseURL.appendingPathComponent("settings")))
+        } else {
+            settingsWebView?.evaluateJavaScript("window.dispatchEvent(new Event('planner:settings-opened'))")
+            if let fragment {
+                if settingsWebView?.isLoading == true { pendingSettingsFragment = fragment }
+                else { revealSettingsSection(fragment) }
+            }
+        }
+        settingsWindow?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func revealSettingsSection(_ fragment: String) {
+        guard ["help", "about"].contains(fragment) else { return }
+        // A hash event also reopens a previously collapsed section at the same URL.
+        settingsWebView?.evaluateJavaScript("window.location.hash = '\(fragment)'; window.dispatchEvent(new HashChangeEvent('hashchange'))")
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        if webView === settingsWebView, let fragment = pendingSettingsFragment {
+            pendingSettingsFragment = nil
+            revealSettingsSection(fragment)
+        }
+    }
+
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard message.name == "plannerDesktop", message.frameInfo.isMainFrame,
+              let source = message.webView, source === webView || source === settingsWebView,
+              let url = message.frameInfo.request.url, isLocal(url),
+              let body = message.body as? [String: Any], let action = body["action"] as? String else { return }
+        switch action {
+        case "openSettings":
+            showSettings(fragment: body["fragment"] as? String)
+        case "closeSettings":
+            if source === settingsWebView { settingsWindow?.performClose(nil) }
+        case "settingsChanged":
+            guard let event = body["event"] as? String,
+                  ["planner:restored", "planner:launchers-changed", "planner:theme-changed"].contains(event),
+                  let data = try? JSONSerialization.data(withJSONObject: body),
+                  let json = String(data: data, encoding: .utf8) else { return }
+            let other = source === settingsWebView ? webView : settingsWebView
+            other?.evaluateJavaScript("{ const message = \(json); window.dispatchEvent(new CustomEvent(message.event, {detail: message.detail})); }")
+        default: break
+        }
     }
 
     private func isLocal(_ url: URL) -> Bool {
@@ -207,7 +281,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         guard let url = navigationAction.request.url else { decisionHandler(.cancel); return }
-        if isLocal(url) { decisionHandler(navigationAction.shouldPerformDownload ? .download : .allow); return }
+        if isLocal(url) {
+            if webView === self.webView && url.path == "/settings" {
+                showSettings(fragment: url.fragment)
+                decisionHandler(.cancel)
+            } else { decisionHandler(navigationAction.shouldPerformDownload ? .download : .allow) }
+            return
+        }
         if navigationAction.navigationType == .linkActivated && ["https", "http", "mailto"].contains(url.scheme ?? "") {
             NSWorkspace.shared.open(url)
         }
@@ -240,7 +320,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         panel.nameFieldStringValue = suggestedFilename
         panel.title = "保存备份"
         panel.canCreateDirectories = true
-        panel.beginSheetModal(for: window) { result in
+        panel.beginSheetModal(for: download.webView?.window ?? window) { result in
             completionHandler(result == .OK ? panel.url : nil)
         }
     }
@@ -250,7 +330,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         let alert = NSAlert()
         alert.messageText = "备份未保存"
         alert.informativeText = "请检查目标文件夹和磁盘空间后重试。"
-        alert.beginSheetModal(for: window)
+        alert.beginSheetModal(for: download.webView?.window ?? window)
     }
 
     func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters,
@@ -259,13 +339,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         panel.title = "选择 Local Planner 备份"
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
-        panel.beginSheetModal(for: window) { result in
+        panel.beginSheetModal(for: webView.window ?? window) { result in
             completionHandler(result == .OK ? panel.urls : nil)
         }
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-        if (error as NSError).code != NSURLErrorCancelled { showFailure("页面加载失败：\(error.localizedDescription)") }
+        guard (error as NSError).code != NSURLErrorCancelled else { return }
+        if webView === settingsWebView, let settingsWindow {
+            let alert = NSAlert()
+            alert.messageText = "设置暂时无法打开"
+            alert.informativeText = "请按 ⌘R 重新载入。\(error.localizedDescription)"
+            alert.beginSheetModal(for: settingsWindow)
+        } else { showFailure("页面加载失败：\(error.localizedDescription)") }
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) { webView.reload() }
@@ -276,14 +362,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         alert.messageText = message
         alert.addButton(withTitle: "确定")
         alert.addButton(withTitle: "取消")
-        alert.beginSheetModal(for: window) { completionHandler($0 == .alertFirstButtonReturn) }
+        alert.beginSheetModal(for: webView.window ?? window) { completionHandler($0 == .alertFirstButtonReturn) }
     }
 
     func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String,
                  initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping () -> Void) {
         let alert = NSAlert()
         alert.messageText = message
-        alert.beginSheetModal(for: window) { _ in completionHandler() }
+        alert.beginSheetModal(for: webView.window ?? window) { _ in completionHandler() }
     }
 
     private func showFailure(_ message: String) {
@@ -330,6 +416,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         webView?.load(URLRequest(url: url))
     }
     @objc private func quickAdd() {
+        window?.makeKeyAndOrderFront(nil)
         webView?.evaluateJavaScript("document.querySelector('.add-form input, .inventory-add-form input') !== null") { [weak self] result, _ in
             if result as? Bool == true {
                 self?.webView?.evaluateJavaScript("window.dispatchEvent(new Event('planner:quick-add'))")
@@ -341,13 +428,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     @objc private func goToday() { navigate("") }
     @objc private func goInventory() { navigate("inventory") }
     @objc private func goRecurrences() { navigate("recurrences") }
-    @objc private func goSettings() { navigate("settings") }
-    @objc private func goHelp() { navigate("settings", fragment: "help") }
-    @objc private func goAbout() { navigate("settings", fragment: "about") }
-    @objc private func reload() { webView?.reload() }
-    @objc private func zoomIn() { if let webView { webView.pageZoom = min(2, webView.pageZoom + 0.1) } }
-    @objc private func zoomOut() { if let webView { webView.pageZoom = max(0.6, webView.pageZoom - 0.1) } }
-    @objc private func resetZoom() { webView?.pageZoom = 1 }
+    @objc private func goSettings() { showSettings() }
+    @objc private func goHelp() { showSettings(fragment: "help") }
+    @objc private func goAbout() { showSettings(fragment: "about") }
+    private var activeWebView: WKWebView? { NSApp.keyWindow === settingsWindow ? settingsWebView : webView }
+    @objc private func reload() { activeWebView?.reload() }
+    @objc private func zoomIn() { if let view = activeWebView { view.pageZoom = min(2, view.pageZoom + 0.1) } }
+    @objc private func zoomOut() { if let view = activeWebView { view.pageZoom = max(0.6, view.pageZoom - 0.1) } }
+    @objc private func resetZoom() { activeWebView?.pageZoom = 1 }
     @objc private func showData() { NSWorkspace.shared.open(dataDirectory) }
     @objc private func showLog() { NSWorkspace.shared.open(dataDirectory.appendingPathComponent("desktop.log")) }
 }

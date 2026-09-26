@@ -2,11 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import { errorMessage, type Backup, type Launcher, type LauncherCheck, settingsRequest } from "./api";
 import { ThemeSwitcher } from "./ThemeSwitcher";
 import { HelpAndAbout } from "./HelpAndAbout";
+import { notifySettingsChange } from "./desktop";
 import { navigate } from "./route";
 
 const BACKUP_LABELS: Record<string, string> = { auto: "自动备份", manual: "手动备份", "before-restore": "恢复前备份", imported: "导入的备份", migration: "升级前备份" };
 
-export function SettingsPage({ onChanged }: { onChanged: () => void }) {
+export function SettingsPage({ onClose }: { onClose?: () => void }) {
   const [backups, setBackups] = useState<Backup[]>([]);
   const [items, setItems] = useState<Launcher[]>([]);
   const [selected, setSelected] = useState("");
@@ -26,16 +27,24 @@ export function SettingsPage({ onChanged }: { onChanged: () => void }) {
   const checkRef = useRef(false);
   const selectedItem = items.find((item) => item.id === selected);
 
-  async function refresh() {
+  async function refresh(preferSaved = false) {
     const [backupData, launcherData] = await Promise.all([
       settingsRequest<{ items: Backup[] }>("/api/backups"), settingsRequest<{ items: Launcher[] }>("/api/launchers"),
     ]);
     setBackups(backupData.items); setItems(launcherData.items); setLoaded(true);
     let saved = "";
     try { saved = localStorage.getItem("planner_agent_launcher") ?? ""; } catch { /* optional preference */ }
-    setSelected((current) => launcherData.items.some((item) => item.id === (current || saved)) ? current || saved : launcherData.items[0]?.id ?? "");
+    setSelected((current) => {
+      const choice = preferSaved ? saved : current || saved;
+      return launcherData.items.some((item) => item.id === choice) ? choice : launcherData.items[0]?.id ?? "";
+    });
   }
-  useEffect(() => { void refresh().catch((err) => setError(errorMessage(err))); }, []);
+  useEffect(() => {
+    const opened = () => { void refresh(true).catch((err) => setError(errorMessage(err))); };
+    opened();
+    window.addEventListener("planner:settings-opened", opened);
+    return () => window.removeEventListener("planner:settings-opened", opened);
+  }, []);
   useEffect(() => { setEditor(null); setRemoving(false); }, [selected]);
   useEffect(() => { if (restoreTarget) restoreRef.current?.focus(); }, [restoreTarget]);
   async function perform(work: () => Promise<void>) {
@@ -55,7 +64,7 @@ export function SettingsPage({ onChanged }: { onChanged: () => void }) {
   function choose(id: string) {
     setSelected(id);
     try { localStorage.setItem("planner_agent_launcher", id); } catch { /* optional preference */ }
-    window.dispatchEvent(new Event("planner:launchers-changed"));
+    notifySettingsChange("planner:launchers-changed", id);
   }
   function importFile(file: File) {
     void perform(async () => {
@@ -74,7 +83,7 @@ export function SettingsPage({ onChanged }: { onChanged: () => void }) {
 
   return <main className="page settings-page">
     <div className="settings-heading"><div><h1>设置</h1><p className="muted">按你的习惯，安心使用。</p></div>
-      <button type="button" className="linkish" onClick={() => navigate("/")}>返回今天</button></div>
+      <button type="button" className="linkish" onClick={onClose ?? (() => navigate("/"))}>{onClose ? "完成" : "返回今天"}</button></div>
     {error && <p className="error" role="alert">{error}</p>}
     {notice && <p className="settings-notice" role="status">{notice}</p>}
     {!loaded && <p role="status">{error ? <button onClick={() => void perform(refresh)}>重新加载</button> : "正在加载…"}</p>}
@@ -106,7 +115,7 @@ export function SettingsPage({ onChanged }: { onChanged: () => void }) {
         <p>将替换当前的事项和历史记录。恢复前会先备份现有数据，之后仍可找回。</p>
         <div className="settings-actions"><button type="button" disabled={busy} onClick={() => void perform(async () => {
           await settingsRequest("/api/backups/restore", "POST", { name: restoreTarget.name });
-          setRestoreTarget(null); window.dispatchEvent(new Event("planner:restored")); onChanged(); await refresh();
+          setRestoreTarget(null); notifySettingsChange("planner:restored"); await refresh();
           setNotice("已恢复。恢复前的数据也已保存为备份。");
         })}>{busy ? "正在处理…" : "确认恢复"}</button>
           <button type="button" className="linkish" disabled={busy} onClick={() => { setRestoreTarget(null); setNotice(null); }}>取消</button></div>
@@ -138,7 +147,7 @@ export function SettingsPage({ onChanged }: { onChanged: () => void }) {
           <button type="button" disabled={busy} onClick={() => void perform(async () => {
             await settingsRequest(`/api/launchers/${selected}`, "DELETE"); setRemoving(false); setSelected("");
             try { localStorage.removeItem("planner_agent_launcher"); } catch { /* preference */ }
-            await refresh(); window.dispatchEvent(new Event("planner:launchers-changed"));
+            await refresh(); notifySettingsChange("planner:launchers-changed", "");
           })}>确认移除</button><button type="button" className="linkish" onClick={() => setRemoving(false)}>取消</button>
         </div></div>}
         {editor && <form className="launcher-editor" onSubmit={(event) => { event.preventDefault(); void perform(async () => {

@@ -88,11 +88,15 @@ export function App() {
           : "today";
 
   const refreshAll = useCallback(() => { setAgentRunTick((tick) => tick + 1); refreshMeta(); }, [refreshMeta]);
+  useEffect(() => {
+    window.addEventListener("planner:restored", refreshAll);
+    return () => window.removeEventListener("planner:restored", refreshAll);
+  }, [refreshAll]);
   useEffect(() => { if (route.kind === "settings") setAgentOpen(false); }, [route.kind]);
 
   let body;
   if (route.kind === "settings") {
-    body = <SettingsPage onChanged={refreshAll} />;
+    body = <SettingsPage />;
   } else if (route.kind === "inventory") {
     if (!meta) {
       body = (

@@ -3018,6 +3018,9 @@ select:focus-visible {
 
 /* Quiet settings and recovery controls. Daily work stays on the main page. */
 .settings-page { max-width: 760px; margin-inline: auto; padding-bottom: 5rem; }
+.settings-window { min-height: 100vh; padding: 1.5rem 2rem; }
+.settings-window .settings-page { margin: 0 auto; padding: 0 0 2rem; }
+.settings-window .settings-heading h1 { font-size: 1.6rem; }
 .settings-heading, .settings-inline { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
 .settings-heading h1 { margin-bottom: .35rem; }
 .settings-heading p { margin: 0; }

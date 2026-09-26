@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { notifySettingsChange } from "./desktop";
 
 export type ThemeId = "warm-paper" | "midnight" | "nordic" | "forest" | "retro";
 
@@ -155,6 +156,8 @@ export function ThemeSwitcher() {
                   aria-checked={isSelected}
                   className={`theme-option ${isSelected ? "selected" : ""}`}
                   onClick={() => {
+                    try { localStorage.setItem(STORAGE_KEY, item.id); } catch { /* optional preference */ }
+                    notifySettingsChange("planner:theme-changed", item.id);
                     setTheme(item.id);
                     setOpen(false);
                   }}
