@@ -109,8 +109,8 @@ def test_frontend_does_not_use_utc_date_strings() -> None:
     assert "src/constants.ts" in vite
     assert "transformIndexHtml" in vite
     day_view = (src / "DayView.tsx").read_text(encoding="utf-8")
-    assert "<h2>Plan</h2>" in day_view
-    assert "<h2>Errands</h2>" in day_view
+    assert "今日计划" in day_view
+    assert "<h2>零碎事项</h2>" in day_view
     files = list(src.rglob("*.ts")) + list(src.rglob("*.tsx"))
     assert files
     for path in files:
@@ -125,8 +125,8 @@ def test_day_view_has_errand_column_not_on_inventory() -> None:
     api = (src / "api.ts").read_text(encoding="utf-8")
     day_view = (src / "DayView.tsx").read_text(encoding="utf-8")
     app = (src / "App.tsx").read_text(encoding="utf-8")
-    assert "<h2>Errands</h2>" in day_view
-    assert "Expired" in day_view
+    assert "<h2>零碎事项</h2>" in day_view
+    assert "已作废" in day_view
     assert "addErrandOnDay" in day_view
     assert "completeErrand" in day_view
     assert "uncompleteErrand" in day_view
@@ -137,8 +137,8 @@ def test_day_view_has_errand_column_not_on_inventory() -> None:
     assert "/api/calendar" not in day_view
     assert "ListInventory" not in day_view
     assert "零碎差事" not in app
-    assert "<h2>Errands</h2>" not in app
-    assert "<h2>Errands</h2>" not in app
+    assert "<h2>零碎事项</h2>" not in app
+    assert "<h2>零碎事项</h2>" not in app
     assert "InventoryPage" in app
     assert "未排期的正经待办将出现在这里" not in app
 
@@ -171,7 +171,7 @@ def test_date_nav_calendar_readonly_and_midnight_poll() -> None:
     assert 'className="day-columns"' in day_view
     assert 'className="column-empty"' in day_view
     assert "DaySealed" in day_view
-    assert "这一天已封印，不能改" in day_view
+    assert "这是过去的记录，仅供回看。" in day_view
     assert "page readonly" in day_view
     assert "[date, serverToday, refreshToken]" in day_view
     assert "/api/calendar" not in day_view
@@ -222,11 +222,11 @@ def test_inventory_schedule_and_inline_add_ui() -> None:
     assert "InventoryPage" in app
     assert "onInventoryChange={refreshMeta}" in app
 
-    assert "From To Do" in day_view
+    assert "从待办中挑选" in day_view
     assert "Add" in day_view
-    assert "To Do →" in day_view
+    assert "查看全部待办 →" in day_view
     assert 'handleNavClick(event, "/inventory")' in day_view
-    assert "Move to To Do" in day_view
+    assert "移回待办" in day_view
     assert "Reschedule" not in day_view
     assert "INVENTORY_INLINE_LIMIT" in day_view
     assert "items.slice(0, INVENTORY_INLINE_LIMIT)" in day_view
@@ -236,13 +236,13 @@ def test_inventory_schedule_and_inline_add_ui() -> None:
     assert 'role="dialog"' not in day_view
     assert "modal" not in day_view.lower()
 
-    assert "<h1>To Do</h1>" in inventory
-    assert "Today" in inventory
-    assert 'label="Later"' in inventory
+    assert "<h1>待办</h1>" in inventory
+    assert "加入今天" in inventory
+    assert 'label="安排到某天"' in inventory
     assert "addToInventory" in inventory
     assert "scheduleTask" in inventory
     assert "inventory-composer-title" in inventory
-    assert "在这里添加新的待办事项" in inventory
+    assert "先记下来，以后再安排" in inventory
     assert 'placeholder="输入待办事项，按回车添加"' in inventory
     assert "formatChineseDate(draftDate)" in inventory
     assert 'return "选择日期"' in inventory
@@ -253,7 +253,7 @@ def test_inventory_schedule_and_inline_add_ui() -> None:
     assert "disabled={!draft.trim()}" in inventory
     assert 'role="dialog"' not in inventory
     assert "零碎差事" not in inventory
-    assert "<h2>Errands</h2>" not in inventory
+    assert "<h2>零碎事项</h2>" not in inventory
     assert "errand" not in inventory.lower()
     assert "new Date(" not in inventory
     assert "new Date(" not in date_pick
@@ -293,14 +293,14 @@ def test_v2_clocks_and_agent_panel_ui() -> None:
     api = (src / "api.ts").read_text(encoding="utf-8")
 
     assert "ClockField" in day_view
-    assert 'label="Start"' in day_view
-    assert 'label="End"' in day_view
+    assert 'label="开始"' in day_view
+    assert 'label="结束"' in day_view
     assert 'type="range"' not in clock
     assert "SLOT_COUNT" not in clock
     assert "new Date(" not in clock
-    assert "Overdue" in inventory
-    assert '"Due"' in inventory or ">Due<" in inventory
-    assert 'aria-label="Target date"' in inventory
+    assert "目标日已过" in inventory
+    assert "目标日是今天" in inventory
+    assert 'aria-label="目标日期（不会自动排入当天）"' in inventory
     assert "setTaskTarget" in inventory
     planning = (src / "DailyPlanningPage.tsx").read_text(encoding="utf-8")
     assert "AgentPanel" in app
@@ -311,23 +311,21 @@ def test_v2_clocks_and_agent_panel_ui() -> None:
     shell = (src / "Shell.tsx").read_text(encoding="utf-8")
     styles = (src / "styles.css").read_text(encoding="utf-8")
     assert "agent-drawer" in agent
-    assert 'role="dialog"' in agent
-    assert 'aria-modal="true"' in agent
+    assert 'role="dialog"' not in agent
+    assert 'hidden={!open}' in agent
     assert "aria-expanded={agentOpen}" in planning
     assert "nav-agent" in shell
     assert "onOpenAgent" in shell
-    assert "agent-backdrop" in agent
+    assert "agent-run-controls" in agent
     assert 'event.key === "Escape"' in agent
-    assert 'event.key !== "Tab"' in agent
-    assert "tabIndex={-1}" in agent
     assert "@media (max-width: 30rem)" in styles
-    assert 'aria-label="Agent group"' in agent
+    assert 'aria-label="选择计划助手"' in agent
     assert "opencode run {prompt}" not in agent
     assert "agent-output" in agent
-    assert "body.stdout" in agent
+    assert "result?.stdout" in agent
     assert "删除" in agent
     assert "/api/launchers" in agent
-    assert "/api/launchers/${selected}/run" in agent
+    assert "/api/agent-runs" in agent
     assert "重新执行" not in agent
     assert "setPrompt(\"\")" not in agent
     assert "resubmit" not in agent

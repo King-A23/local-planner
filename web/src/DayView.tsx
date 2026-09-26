@@ -26,6 +26,8 @@ import {
   type PlanningStatus,
   type Todo,
 } from "./api";
+import { TaskDetails, ClockSummary } from "./TaskDetails";
+import { useQuickAdd } from "./useQuickAdd";
 import { ClockField } from "./ClockField";
 import { INVENTORY_INLINE_LIMIT } from "./constants";
 import { addCivilDays, formatDayHeading } from "./dates";
@@ -59,6 +61,9 @@ export function DayView({
   const [errandDraft, setErrandDraft] = useState("");
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [inventoryError, setInventoryError] = useState<string | null>(null);
+  const quickAddRef = useQuickAdd(Boolean(plan?.writable) && !loading);
+  const addingRef = useRef(false);
+  const addingErrandRef = useRef(false);
   const planRef = useRef(plan);
   planRef.current = plan;
 
@@ -146,14 +151,16 @@ export function DayView({
       return;
     }
     const title = draft.trim();
-    if (!title) {
-      return;
-    }
-    await apply(async () => {
-      const next = await addTodoOnDay(plan.date, title);
-      setDraft("");
-      return next;
-    });
+    if (!title || addingRef.current) return;
+    addingRef.current = true;
+    try {
+      await apply(async () => {
+        const next = await addTodoOnDay(plan.date, title);
+        setDraft((current) => current.trim() === title ? "" : current);
+        onInventoryChange?.();
+        return next;
+      });
+    } finally { addingRef.current = false; }
   }
 
   function onToggle(todo: Todo): void {
@@ -275,14 +282,15 @@ export function DayView({
       return;
     }
     const title = errandDraft.trim();
-    if (!title) {
-      return;
-    }
-    await apply(async () => {
-      const next = await addErrandOnDay(plan.date, title);
-      setErrandDraft("");
-      return next;
-    });
+    if (!title || addingErrandRef.current) return;
+    addingErrandRef.current = true;
+    try {
+      await apply(async () => {
+        const next = await addErrandOnDay(plan.date, title);
+        setErrandDraft((current) => current.trim() === title ? "" : current);
+        return next;
+      });
+    } finally { addingErrandRef.current = false; }
   }
 
   function onToggleErrand(errand: Errand): void {
@@ -346,9 +354,9 @@ export function DayView({
         </a>
         <h1 className="day-heading">
           <span>{formatDayHeading(plan.date)}</span>
-          {plan.isToday ? <span className="badge">Today</span> : null}
-          {plan.isPast ? <span className="badge">Read-only</span> : null}
-          {plan.isFuture ? <span className="badge">Future</span> : null}
+          {plan.isToday ? <span className="badge">今天</span> : null}
+          {plan.isPast ? <span className="badge">只读</span> : null}
+          {plan.isFuture ? <span className="badge">未来</span> : null}
         </h1>
         <a
           className="day-arrow"
@@ -360,17 +368,17 @@ export function DayView({
         </a>
       </div>
       {!plan.writable ? (
-        <p className="sealed">这一天已封印，不能改</p>
+        <p className="sealed">这是过去的记录，仅供回看。</p>
       ) : null}
       {error ? <p className="error">{error}</p> : null}
       {plan.isToday && planningStatus === "unplanned" ? (
         <section className="planning-prompt" aria-labelledby="planning-prompt-title">
           <div>
-            <h2 id="planning-prompt-title">今天尚未规划</h2>
-            <p>先挑几件今天真的要做的事；定期事项已保留在清单中。</p>
+            <h2 id="planning-prompt-title">给今天留一点余地</h2>
+            <p>直接记下要做的事，也可以从待办里挑几件。</p>
           </div>
           <button type="button" className="button-secondary" onClick={onStartPlanning}>
-            制定今天计划
+            整理今天
           </button>
         </section>
       ) : null}
@@ -384,7 +392,7 @@ export function DayView({
         return (
           <div className="day-progress-card">
             <div className="day-progress-header">
-              <span className="day-progress-title">今日进度</span>
+              <span className="day-progress-title">完成进度</span>
               <span className="day-progress-counter">
                 {done} / {total} 已完成 ({pct}%)
               </span>
@@ -401,7 +409,7 @@ export function DayView({
       <div className="day-columns">
         <section className="column">
           <div className="list-heading">
-            <h2>Plan</h2>
+            <h2>{plan.isToday ? "今日计划" : "当天计划"}</h2>
             {plan.writable ? (
               <button
                 type="button"
@@ -414,7 +422,7 @@ export function DayView({
           </div>
           {plan.todos.length === 0 ? (
             <p className="column-empty">
-              今天还没有计划，直接添加或从 To Do 选择。
+              先写下今天想做的一件事，也可以从待办里挑选。
             </p>
           ) : (
             <ul className="todos">
@@ -439,10 +447,12 @@ export function DayView({
           {plan.writable ? (
             <form className="add-form" onSubmit={onAdd}>
               <input
+                ref={quickAddRef}
+                onKeyDown={(e) => { if (e.key === "Escape") { setDraft(""); e.currentTarget.blur(); } }}
                 value={draft}
                 onChange={(event) => setDraft(event.target.value)}
-                aria-label="Plan"
-                placeholder="添加计划事项 (Enter 保存)..."
+                aria-label="添加计划"
+                placeholder="今天想做什么？回车添加"
                 maxLength={200}
               />
             </form>
@@ -457,7 +467,7 @@ export function DayView({
         </section>
         <section className="column">
           <div className="list-heading">
-            <h2>Errands</h2>
+            <h2>零碎事项</h2>
             {plan.writable ? (
               <button
                 type="button"
@@ -469,7 +479,7 @@ export function DayView({
             ) : null}
           </div>
           {plan.errands.length === 0 ? (
-            <p className="column-empty">今天还没有零碎事项。</p>
+            <p className="column-empty">取快递、买杯咖啡……当天的小事记在这里。</p>
           ) : (
             <ul className="todos">
               {plan.errands.map((errand) => (
@@ -492,10 +502,11 @@ export function DayView({
           {plan.writable ? (
             <form className="add-form" onSubmit={onAddErrand}>
               <input
+                onKeyDown={(e) => { if (e.key === "Escape") { setErrandDraft(""); e.currentTarget.blur(); } }}
                 value={errandDraft}
                 onChange={(event) => setErrandDraft(event.target.value)}
-                aria-label="Errands"
-                placeholder="添加零碎事项 (Enter 保存)..."
+                aria-label="添加零碎事项"
+                placeholder="记一件小事，回车添加"
                 maxLength={200}
               />
             </form>
@@ -597,15 +608,18 @@ function TodoRow({
             : `定期 · ${todo.recurrence.label}`}
         </span>
       ) : null}
+      <ClockSummary start={todo.startClock} end={todo.endClock} />
+      {writable ? (
+        <TaskDetails title={todo.title}>
       <span className="clock-row">
         <ClockField
-          label="Start"
+          label="开始"
           value={todo.startClock}
           disabled={!writable}
           onChange={(start) => onClocks(todo, start, todo.endClock)}
         />
         <ClockField
-          label="End"
+          label="结束"
           value={todo.endClock}
           disabled={!writable}
           onChange={(end) => onClocks(todo, todo.startClock, end)}
@@ -619,13 +633,15 @@ function TodoRow({
               className="linkish quiet"
               onClick={() => onUnschedule(todo)}
             >
-              Move to To Do
+              移回待办
             </button>
           ) : null}
           <button type="button" className="linkish" onClick={() => onDelete(todo)}>
-            Delete
+            删除
           </button>
         </span>
+      ) : null}
+        </TaskDetails>
       ) : null}
     </li>
   );
@@ -643,7 +659,7 @@ function InventoryAddBlock({
   const shown = items.slice(0, INVENTORY_INLINE_LIMIT);
   return (
     <div className="inventory-add">
-      <h3>From To Do</h3>
+      <h3>从待办中挑选</h3>
       {error ? <p className="error">{error}</p> : null}
       {shown.length > 0 ? (
         <ul className="inventory-inline">
@@ -655,7 +671,7 @@ function InventoryAddBlock({
                 className="linkish quiet"
                 onClick={() => onSchedule(item)}
               >
-                Add
+                加入
               </button>
             </li>
           ))}
@@ -666,7 +682,7 @@ function InventoryAddBlock({
         href="/inventory"
         onClick={(event) => handleNavClick(event, "/inventory")}
       >
-        To Do →
+        查看全部待办 →
       </a>
     </div>
   );
@@ -723,7 +739,7 @@ function ErrandRow({
   return (
     <li className={className}>
       {voided ? (
-        <span className="badge">Expired</span>
+        <span className="badge">已作废</span>
       ) : (
         <input
           type="checkbox"
@@ -775,15 +791,18 @@ function ErrandRow({
             : `定期 · ${errand.recurrence.label}`}
         </span>
       ) : null}
+      <ClockSummary start={errand.startClock} end={errand.endClock} />
+      {writable && !voided ? (
+        <TaskDetails title={errand.title}>
       <span className="clock-row">
         <ClockField
-          label="Start"
+          label="开始"
           value={errand.startClock}
           disabled={!writable || voided}
           onChange={(start) => onClocks(errand, start, errand.endClock)}
         />
         <ClockField
-          label="End"
+          label="结束"
           value={errand.endClock}
           disabled={!writable || voided}
           onChange={(end) => onClocks(errand, errand.startClock, end)}
@@ -796,9 +815,11 @@ function ErrandRow({
             className="linkish"
             onClick={() => onDelete(errand)}
           >
-            Delete
+            删除
           </button>
         </span>
+      ) : null}
+        </TaskDetails>
       ) : null}
     </li>
   );

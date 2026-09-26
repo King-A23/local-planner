@@ -7,17 +7,20 @@ import os
 import sqlite3
 import threading
 import time
+import uuid
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 from fastapi import FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from local_planner.agent_receipts import build_agent_receipt
+from local_planner.agent_runs import AgentRuns, RunControl
 from local_planner.clock import Clock
 from local_planner.domain import commands as cmds
 from local_planner.domain.commands import UNSET
@@ -90,8 +93,14 @@ class LauncherBody(BaseModel):
 
 class PromptBody(BaseModel):
     prompt: str
-    surface: str = "today"
+    surface: Literal["today", "todo", "day"] = "today"
     date: str | None = None
+
+
+class AgentRunBody(PromptBody):
+    launcherId: str
+    requestId: str = Field(min_length=1, max_length=100)
+    prompt: str = Field(min_length=1, max_length=10000)
 
 
 class RecurrenceCreateBody(BaseModel):
@@ -217,13 +226,22 @@ def create_app(
     if data_dir is None:
         data_dir = _data_dir_from_uow(uow)
     ctx = AppContext(clock=clock, uow=uow, port=port, dev=dev, data_dir=data_dir)
+    runs = AgentRuns(data_dir)
+
+    @asynccontextmanager
+    async def lifespan(_app):
+        yield
+        runs.close()
+
     app = FastAPI(
+        lifespan=lifespan,
         title="Local Planner",
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
     )
     app.state.ctx = ctx
+    app.state.agent_runs = runs
 
     @app.middleware("http")
     async def origin_and_log(request: Request, call_next):  # type: ignore[no-untyped-def]
@@ -725,8 +743,7 @@ def create_app(
             raise NotFound("找不到该启动器") from None
         return {"ok": True}
 
-    @app.post("/api/launchers/{launcher_id}/run")
-    def run_agent(launcher_id: str, body: PromptBody) -> dict[str, Any]:
+    def execute_agent(launcher_id: str, body: PromptBody, control: RunControl | None = None) -> dict[str, Any]:
         items = load_launchers(ctx.data_dir)
         found = next((item for item in items if item.id == launcher_id), None)
         if found is None:
@@ -743,6 +760,7 @@ def create_app(
             data_root=ctx.data_dir,
             surface=body.surface,
             date=body.date,
+            **({"control": control} if control else {}),
         )
         after = _locked(
             ctx,
@@ -754,15 +772,50 @@ def create_app(
             if result.ok
             else ("failed_with_changes" if receipt["changed"] else "failed")
         )
+        if control and control.cancelled:
+            status = "stopped_with_changes" if receipt["changed"] else "stopped"
         return {
-            "ok": result.ok,
+            "ok": result.ok and not (control and control.cancelled),
             "status": status,
+            "message": "已停止本次执行，已经保存的改动会保留。" if control and control.cancelled else (None if result.ok else "执行未完成，可能已有部分改动，请核对计划。"),
             "receipt": receipt,
             "argv": result.argv,
             "returncode": result.returncode,
             "stdout": result.stdout,
             "stderr": result.stderr,
         }
+
+    @app.post("/api/launchers/{launcher_id}/run")
+    def run_agent(launcher_id: str, body: PromptBody) -> dict[str, Any]:
+        # Legacy synchronous callers also participate in the one-run lease.
+        if not any(item.id == launcher_id for item in load_launchers(ctx.data_dir)):
+            raise NotFound("找不到该启动器")
+        run = runs.start(str(uuid.uuid4()), launcher_id, body.prompt,
+                         lambda control: execute_agent(launcher_id, body, control), surface=body.surface, date=body.date)
+        while (latest := runs.get(run["id"]))["result"] is None:
+            time.sleep(0.02)
+        return latest["result"]
+
+    @app.post("/api/agent-runs", status_code=202)
+    def start_agent(body: AgentRunBody) -> dict[str, Any]:
+        if not body.prompt.strip():
+            raise ValidationError("请先写下要助手做的事")
+        if not any(item.id == body.launcherId for item in load_launchers(ctx.data_dir)):
+            raise NotFound("找不到该启动器")
+        return runs.start(body.requestId, body.launcherId, body.prompt,
+                          lambda control: execute_agent(body.launcherId, body, control), surface=body.surface, date=body.date)
+
+    @app.get("/api/agent-runs")
+    def latest_agent() -> dict[str, Any]:
+        return {"run": runs.get()}
+
+    @app.get("/api/agent-runs/{run_id}")
+    def get_agent(run_id: str) -> dict[str, Any]:
+        return runs.get(run_id)
+
+    @app.post("/api/agent-runs/{run_id}/{action}")
+    def control_agent(run_id: str, action: Literal["pause", "resume", "stop"]) -> dict[str, Any]:
+        return runs.control(run_id, action)
 
     if dist_dir is not None:
         mount_spa(app, dist_dir)

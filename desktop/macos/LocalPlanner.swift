@@ -87,6 +87,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         app.addItem(.separator())
         add(app, "退出 Local Planner", #selector(NSApplication.terminate(_:)), "q")
         let file = menu("文件")
+        add(file, "新增事项", #selector(quickAdd), "n", target: self)
+        file.addItem(.separator())
         add(file, "打开数据文件夹", #selector(showData), target: self)
         add(file, "打开运行日志", #selector(showLog), target: self)
         file.addItem(.separator())
@@ -99,7 +101,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         }
         let view = menu("显示")
         add(view, "今天", #selector(goToday), "1", target: self)
-        add(view, "To Do", #selector(goInventory), "2", target: self)
+        add(view, "待办", #selector(goInventory), "2", target: self)
         add(view, "定期事项", #selector(goRecurrences), "3", target: self)
         view.addItem(.separator())
         add(view, "重新载入", #selector(reload), "r", target: self)
@@ -273,6 +275,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     private func navigate(_ path: String) {
         guard let baseURL else { return }
         webView?.load(URLRequest(url: baseURL.appendingPathComponent(path)))
+    }
+    @objc private func quickAdd() {
+        webView?.evaluateJavaScript("document.querySelector('.add-form input, .inventory-add-form input') !== null") { [weak self] result, _ in
+            if result as? Bool == true {
+                self?.webView?.evaluateJavaScript("window.dispatchEvent(new Event('planner:quick-add'))")
+            } else if let url = self?.baseURL {
+                self?.webView?.load(URLRequest(url: url.appending(queryItems: [URLQueryItem(name: "add", value: "1")])))
+            }
+        }
     }
     @objc private func goToday() { navigate("") }
     @objc private func goInventory() { navigate("inventory") }

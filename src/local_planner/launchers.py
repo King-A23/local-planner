@@ -14,7 +14,10 @@ import time
 import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from local_planner.agent_runs import RunControl
 
 logger = logging.getLogger(__name__)
 
@@ -281,6 +284,7 @@ def run_launcher(
     data_root: Path | None = None,
     surface: str = "today",
     date: str | None = None,
+    control: RunControl | None = None,
 ) -> RunResult:
     clock = clock or resolve_clock()
     root = data_root or data_dir()
@@ -322,7 +326,13 @@ def run_launcher(
                 errors="replace",
                 env=env,
             ) as process:
-                return _collect_result(process, argv, launcher, timeout)
+                if control:
+                    control.attach(process)
+                try:
+                    return _collect_result(process, argv, launcher, timeout, control)
+                finally:
+                    if control:
+                        control.detach()
         except OSError as exc:
             return RunResult(
                 ok=False,
@@ -333,13 +343,13 @@ def run_launcher(
             )
 
 
-def _collect_result(process, argv: list[str], launcher: Launcher, timeout: float) -> RunResult:
+def _collect_result(process, argv: list[str], launcher: Launcher, timeout: float, control: RunControl | None = None) -> RunResult:
     deadline = time.monotonic() + timeout
     failure_reason = None
     while True:
         try:
             stdout, stderr = process.communicate(
-                timeout=max(0.001, min(1.0, deadline - time.monotonic()))
+                timeout=0.2 if control else max(0.001, min(1.0, deadline - time.monotonic()))
             )
             break
         except subprocess.TimeoutExpired as exc:
@@ -348,7 +358,10 @@ def _collect_result(process, argv: list[str], launcher: Launcher, timeout: float
             if output.count(b"tool was called with invalid arguments:") >= 3:
                 failure_reason = "工具参数格式反复出错（至少 3 次）：已停止执行。当前模型接入无法可靠调用工具，请检查接入配置或选择其他计划助手。"
                 break
-            if time.monotonic() >= deadline:
+            if control and control.status == "paused":
+                continue
+            timed_out = control.elapsed() >= timeout if control else time.monotonic() >= deadline
+            if timed_out:
                 failure_reason = "timeout：执行超时，已停止本次进程及其子进程；可能已有部分修改，请核对计划后再重试。"
                 break
     if failure_reason:

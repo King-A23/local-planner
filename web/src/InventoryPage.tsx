@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import {
   addToInventory,
@@ -10,6 +10,8 @@ import {
   setTaskTarget,
   type InventoryItem,
 } from "./api";
+import { TaskDetails } from "./TaskDetails";
+import { useQuickAdd } from "./useQuickAdd";
 import { DatePickButton } from "./DatePickButton";
 import { maxWritableDate } from "./dates";
 
@@ -37,16 +39,18 @@ export function InventoryPage({
   const [draft, setDraft] = useState("");
   const [draftDate, setDraftDate] = useState("");
   const maxDate = maxWritableDate(today);
+  const quickAddRef = useQuickAdd(items !== null);
+  const addingRef = useRef(false);
 
   function dueHint(target: string | null): string | null {
     if (!target) {
       return null;
     }
     if (target < today) {
-      return "Overdue";
+      return "目标日已过";
     }
     if (target === today) {
-      return "Due";
+      return "目标日是今天";
     }
     return null;
   }
@@ -91,14 +95,17 @@ export function InventoryPage({
   async function onAdd(event: FormEvent): Promise<void> {
     event.preventDefault();
     const title = draft.trim();
-    if (!title) {
+    if (!title || addingRef.current) {
       return;
     }
-    await mutate(async () => {
-      await addToInventory(title, draftDate || null);
-      setDraft("");
-      setDraftDate("");
-    });
+    addingRef.current = true;
+    try {
+      await mutate(async () => {
+        await addToInventory(title, draftDate || null);
+        setDraft((current) => current.trim() === title ? "" : current);
+        setDraftDate((current) => current === draftDate ? "" : current);
+      });
+    } finally { addingRef.current = false; }
   }
 
   if (items === null) {
@@ -111,7 +118,7 @@ export function InventoryPage({
 
   return (
     <main className="page">
-      <h1>To Do</h1>
+      <h1>待办</h1>
       {error ? <p className="error">{error}</p> : null}
       {items.length === 0 ? (
         <p className="empty-copy">还没有待办事项，可以从下面添加第一件。</p>
@@ -126,6 +133,18 @@ export function InventoryPage({
               {item.recurrence ? (
                 <span className="badge recurrence-badge">来自定期事项</span>
               ) : null}
+              {item.targetDate ? <span className="task-clock-summary">目标：{item.targetDate}</span> : null}
+                <button
+                  type="button"
+                  className="linkish quiet"
+                  onClick={() =>
+                    void mutate(() => scheduleTask(item.taskId, today))
+                  }
+                >
+                  加入今天
+                </button>
+              <TaskDetails title={item.title}>
+                <label className="target-label">目标日期 <small>只作参考，不会自动排入当天</small>
               <input
                 type="date"
                 value={item.targetDate ?? ""}
@@ -134,8 +153,9 @@ export function InventoryPage({
                     setTaskTarget(item.taskId, event.target.value || null),
                   )
                 }
-                aria-label="Target date"
+                aria-label="目标日期（不会自动排入当天）"
               />
+                </label>
               <span className="todo-actions">
                 <button
                   type="button"
@@ -145,17 +165,8 @@ export function InventoryPage({
                 >
                   标记已完成
                 </button>
-                <button
-                  type="button"
-                  className="linkish quiet"
-                  onClick={() =>
-                    void mutate(() => scheduleTask(item.taskId, today))
-                  }
-                >
-                  Today
-                </button>
                 <DatePickButton
-                  label="Later"
+                  label="安排到某天"
                   min={today}
                   max={maxDate}
                   onPick={(date) =>
@@ -168,21 +179,24 @@ export function InventoryPage({
                   aria-label={`删除：${item.title}`}
                   onClick={() => void mutate(() => deleteTask(item.taskId))}
                 >
-                  Delete
+                  删除
                 </button>
               </span>
+              </TaskDetails>
             </li>
           ))}
         </ul>
       )}
       <section className="inventory-composer" aria-labelledby="inventory-composer-title">
         <h2 id="inventory-composer-title" className="inventory-composer-title">
-          在这里添加新的待办事项，也可以让上方的计划助手帮你完成。
+          先记下来，以后再安排
         </h2>
         <form className="add-form inventory-add-form" onSubmit={onAdd}>
           <label className="inventory-title-field">
             <span className="visually-hidden">新的待办事项</span>
             <input
+              ref={quickAddRef}
+              onKeyDown={(e) => { if (e.key === "Escape") { setDraft(""); e.currentTarget.blur(); } }}
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
               aria-label="新的待办事项"
@@ -191,7 +205,7 @@ export function InventoryPage({
             />
           </label>
           <label className="inventory-date-field">
-            <span className="visually-hidden">目标日期（可选）</span>
+            <span className="visually-hidden">目标日期（可选，不会自动排入当天）</span>
             <span className="inventory-date-value" aria-hidden="true">
               {formatChineseDate(draftDate)}
             </span>
@@ -216,7 +230,7 @@ export function InventoryPage({
               lang="zh-CN"
               value={draftDate}
               onChange={(event) => setDraftDate(event.target.value)}
-              aria-label="目标日期（可选）"
+              aria-label="目标日期（可选，不会自动排入当天）"
             />
           </label>
           <button

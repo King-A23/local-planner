@@ -116,7 +116,7 @@ function stateLabel(item: Recurrence): string {
 }
 
 function kindLabel(kind: RecurrenceKind): string {
-  return kind === "plan" ? "Plan" : "Errands";
+  return kind === "plan" ? "计划" : "零碎事项";
 }
 
 function timeSummary(item: Recurrence): string | null {
@@ -535,7 +535,7 @@ function RoutineFormDialog({
                 value="plan"
                 onChange={() => setKind("plan")}
               />
-              Plan
+              计划
             </label>
             <label>
               <input
@@ -544,13 +544,13 @@ function RoutineFormDialog({
                 value="errand"
                 onChange={() => setKind("errand")}
               />
-              Errands
+              零碎事项
             </label>
           </fieldset>
           <p className="form-help">
             {kind === "plan"
-              ? "Plan 本期未完成会回到 To Do；下一期仍会照常出现。"
-              : "Errands 本期未完成当天作废，不会进入 To Do。"}
+              ? "计划本期未完成会回到待办；下一期仍会照常出现。"
+              : "零碎事项本期未完成当天作废，不会进入待办。"}
           </p>
           <fieldset>
             <legend>重复</legend>

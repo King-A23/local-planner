@@ -12,6 +12,7 @@ type ShellProps = {
   viewedDate?: string;
   activeSection?: "today" | "inventory" | "recurrences";
   agentOpen: boolean;
+  agentStatus?: string | null;
   onOpenAgent: (trigger: HTMLButtonElement) => void;
 };
 
@@ -22,6 +23,7 @@ export function Shell({
   viewedDate,
   activeSection,
   agentOpen,
+  agentStatus,
   onOpenAgent,
 }: ShellProps) {
   const [calOpen, setCalOpen] = useState(false);
@@ -38,14 +40,14 @@ export function Shell({
             aria-current={activeSection === "today" ? "page" : undefined}
             onClick={(e) => handleNavClick(e, "/")}
           >
-            Today
+            今天
           </a>
           <a
             href="/inventory"
             aria-current={activeSection === "inventory" ? "page" : undefined}
             onClick={(e) => handleNavClick(e, "/inventory")}
           >
-            To Do
+            待办
             {inventoryCount ? (
               <span className="badge count">{inventoryCount}</span>
             ) : null}
@@ -65,7 +67,7 @@ export function Shell({
             onClick={(event) => onOpenAgent(event.currentTarget)}
           >
             <span className="agent-nav-sparkle">✨</span>
-            <span className="agent-label-long">计划助手</span>
+            <span className="agent-label-long">{agentStatus === "paused" ? "助手已暂停" : agentStatus ? "助手执行中" : "计划助手"}</span>
             <span className="agent-label-short">助手</span>
           </button>
           <button
@@ -76,7 +78,7 @@ export function Shell({
             disabled={!today}
             onClick={() => setCalOpen((open) => !open)}
           >
-            Calendar
+            日历
           </button>
           <ThemeSwitcher />
           {calOpen && today ? (

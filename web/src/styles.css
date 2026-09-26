@@ -2961,3 +2961,57 @@ select:focus-visible {
   background: var(--surface-raised);
   box-shadow: 0 0 0 2.5px var(--color-focus-ring);
 }
+
+/* Daily-use polish: primary content stays visible, optional controls unfold. */
+.task-clock-summary { color: var(--color-muted); font-size: 0.78rem; white-space: nowrap; }
+.task-details { position: relative; margin-left: auto; flex: 0 0 auto; }
+.task-details > summary { list-style: none; cursor: pointer; padding: 0.1rem 0.6rem; border-radius: var(--radius-control); color: var(--color-muted); font-weight: 600; }
+.task-details > summary::-webkit-details-marker { display: none; }
+.task-details > summary:hover, .task-details[open] > summary { background: var(--surface-hover); color: var(--color-ink); }
+.task-details-content { position: absolute; right: 0; top: 100%; z-index: 20; min-width: 15rem; max-width: min(24rem, 80vw); display: flex; flex-direction: column; gap: 0.7rem; padding: 0.85rem; background: var(--surface-raised); border: 1px solid var(--border-default); border-radius: var(--radius-control); box-shadow: 0 8px 24px #0001; }
+.task-details-content .todo-actions { opacity: 1; pointer-events: auto; transform: none; margin: 0; flex-wrap: wrap; }
+.task-details-content .clock-row { justify-content: flex-start; }
+.target-label { display: grid; gap: 0.3rem; font-size: 0.85rem; }
+.target-label small { color: var(--color-muted); }
+.todo:hover, .inventory-item:hover { transform: none; }
+.planning-prompt { padding: 0.8rem 1rem; box-shadow: none; }
+.planning-prompt h2 { font-size: 0.9rem; }
+.upcoming-section > summary { cursor: pointer; color: var(--color-muted); }
+.agent-dock-layer[hidden] { display: none; }
+.agent-panel-heading { width: 100%; display: flex; align-items: center; justify-content: space-between; pointer-events: auto; padding: 0.4rem 0.7rem; border-radius: 0.7rem 0.7rem 0 0; background: var(--surface-raised); border: 1px solid var(--border-default); font-size: 0.88rem; }
+.agent-panel-heading small { color: var(--color-muted); margin-left: 0.5rem; }
+.agent-composer { pointer-events: auto; width: 100%; background: var(--surface-raised); border: 1px solid var(--border-default); border-radius: 0 0 0.85rem 0.85rem; box-shadow: 0 5px 25px #0001; padding: 0.65rem 0.85rem; }
+.agent-composer textarea { display: block; width: 100%; min-height: 44px; resize: none; border: 0; background: transparent; color: var(--color-ink); font: inherit; padding: 0.25rem; }
+.agent-composer-tools { display: flex; gap: 0.5rem; align-items: center; }
+.agent-composer-tools select { max-width: 16rem; font: inherit; font-size: 0.8rem; border: 0; background: var(--surface-subtle); color: var(--color-ink); border-radius: 0.3rem; padding: 0.25rem; }
+.agent-input-hint { flex: 1; color: var(--color-muted); font-size: 0.7rem; text-align: right; }
+.agent-run-card.agent-floating-receipt-card { position: static; width: 100%; margin: 0; border-radius: 0; max-height: 36vh; overflow: auto; box-shadow: none; }
+.agent-run-prompt { font-size: 0.88rem; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 5rem; overflow: auto; margin: 0.5rem 0; }
+.agent-run-controls { display: flex; gap: 0.7rem; align-items: center; }
+.agent-run-hint, .agent-connection { font-size: 0.78rem; color: var(--color-muted); margin: 0.5rem 0 0; }
+.agent-connection, .agent-dock-wrapper > .error { pointer-events: auto; background: var(--surface-raised); padding: 0.6rem; width: 100%; }
+.agent-output summary { cursor: pointer; font-size: 0.8rem; }
+.agent-output pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 12rem; overflow: auto; }
+.layout[data-agent-open="true"] .page { padding-bottom: 17rem; }
+@media (max-width: 680px) {
+  .agent-input-hint { display: none; }
+  .agent-composer-tools select { flex: 1; max-width: 65%; }
+}
+
+[data-theme="warm-paper"] {
+  --ambient-gradient: linear-gradient(#f8f6f0, #f8f6f0);
+  --theme-pattern-opacity: 0.08;
+  --color-card-bg: #fffdfa;
+  --color-shadow-card: 0 2px 8px rgba(43, 39, 35, 0.035);
+}
+[data-theme="warm-paper"] .theme-decor-warm-paper { display: none; }
+.agent-panel-heading, .agent-composer, .agent-run-card.agent-floating-receipt-card,
+.task-details-content, .agent-dock-wrapper > .error, .agent-connection {
+  background-color: var(--color-page-bg);
+  background-image: linear-gradient(var(--surface-raised), var(--surface-raised));
+}
+.agent-run-controls > button:not(.linkish) {
+  font: inherit; font-size: 0.85rem; padding: 0.4rem 0.8rem; border-radius: var(--radius-control);
+  border: 1px solid var(--border-default); background: var(--surface-subtle); color: var(--color-ink); cursor: pointer;
+}
+.agent-run-controls > button:disabled { opacity: 0.5; cursor: default; }

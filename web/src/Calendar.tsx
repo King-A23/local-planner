@@ -113,7 +113,7 @@ export function MonthCalendar({
           </button>
         </div>
         <button type="button" className="cal-today" onClick={goToday}>
-          Today
+          今天
         </button>
         {error ? <p className="error">{error}</p> : null}
         <div className="cal-weekdays">

@@ -30,11 +30,11 @@ export function App() {
   const route = parseRoute(pathname);
   const [meta, setMeta] = useState<Meta | null>(null);
   const [metaError, setMetaError] = useState<string | null>(null);
-  const [planningDismissed, setPlanningDismissed] = useState(false);
   const [agentOpen, setAgentOpen] = useState(() => {
     if (typeof window === "undefined") return false;
     return new URLSearchParams(window.location.search).get("agent") === "1";
   });
+  const [agentStatus, setAgentStatus] = useState<string | null>(null);
   const [agentRunTick, setAgentRunTick] = useState(0);
   const agentTriggerRef = useRef<HTMLElement | null>(null);
 
@@ -61,24 +61,6 @@ export function App() {
       window.clearInterval(id);
     };
   }, [refreshMeta]);
-
-  useEffect(() => {
-    setPlanningDismissed(false);
-  }, [meta?.today]);
-
-  const displayingToday =
-    route.kind === "today" ||
-    (route.kind === "day" && route.date === meta?.today);
-
-  useEffect(() => {
-    if (
-      meta?.planningStatus === "unplanned" &&
-      displayingToday &&
-      !planningDismissed
-    ) {
-      navigate("/planning/today");
-    }
-  }, [displayingToday, meta?.planningStatus, planningDismissed]);
 
   const viewedDate =
     route.kind === "day"
@@ -149,11 +131,9 @@ export function App() {
       <DailyPlanningPage
         onChange={refreshMeta}
         onReady={() => {
-          setPlanningDismissed(true);
           refreshMeta();
         }}
         onDefer={() => {
-          setPlanningDismissed(true);
           navigate("/");
         }}
         agentOpen={agentOpen}
@@ -167,7 +147,7 @@ export function App() {
         <h1>找不到该页</h1>
         <p>
           <a href="/" onClick={(e) => handleNavClick(e, "/")}>
-            Today
+            今天
           </a>
         </p>
       </main>
@@ -189,7 +169,6 @@ export function App() {
             onInventoryChange={refreshMeta}
             planningStatus={meta.planningStatus}
             onStartPlanning={() => {
-              setPlanningDismissed(false);
               navigate("/planning/today");
             }}
             refreshToken={agentRunTick}
@@ -207,7 +186,6 @@ export function App() {
           route.date === meta?.today ? meta?.planningStatus : undefined
         }
         onStartPlanning={() => {
-          setPlanningDismissed(false);
           navigate("/planning/today");
         }}
         refreshToken={agentRunTick}
@@ -219,6 +197,7 @@ export function App() {
     <div className="layout" data-agent-open={agentOpen ? "true" : undefined}>
       <BackgroundDecorations />
       <Shell
+        agentStatus={agentStatus}
         inventoryCount={meta?.inventoryCount}
         today={meta?.today}
         viewedDate={viewedDate}
@@ -229,6 +208,7 @@ export function App() {
         {body}
       </Shell>
       <AgentPanel
+        onStatusChange={setAgentStatus}
         open={agentOpen}
         onClose={() => setAgentOpen(false)}
         onOpen={() => setAgentOpen(true)}

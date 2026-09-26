@@ -23,20 +23,20 @@ function candidateGroups(planning: TodayPlanning): CandidateGroup[] {
   return [
     {
       key: "returned",
-      title: "昨天回到 To Do",
-      description: "昨天未完成的 Plan，仍由你决定是否加入今天。",
+      title: "昨天未完成",
+      description: "继续做还是先放一放，由你决定。",
       items: planning.returnedFromYesterday,
     },
     {
       key: "due",
       title: "到期 / 已过期",
-      description: "这些 To Do 的目标日是今天或更早，不会自动加入 Plan。",
+      description: "目标日期已到的待办，需要你选入今天。",
       items: planning.due,
     },
     {
       key: "inventory",
-      title: "其他 To Do",
-      description: "从库存中挑几件今天真的要做的事。",
+      title: "其他待办",
+      description: "挑几件今天想做的事，其余留着以后。",
       items: planning.inventory,
     },
   ];
@@ -159,13 +159,13 @@ export function DailyPlanningPage({
         <header className="planning-header">
           <div>
             <p className="planning-eyebrow">{formatDayHeading(planning.date)}</p>
-            <h1>制定今天计划</h1>
+            <h1>整理今天</h1>
             <p className="muted">
-              挑选几件今天真的承诺要做的事；其他继续留在 To Do。
+              挑选几件今天真的承诺要做的事；其他继续留在待办。
             </p>
           </div>
           <button type="button" className="linkish quiet" onClick={onDefer}>
-            暂不制定
+            返回今天
           </button>
         </header>
         {error ? <p className="error" role="alert">{error}</p> : null}
@@ -173,8 +173,8 @@ export function DailyPlanningPage({
         <section className="planning-section current-plan" aria-labelledby="planning-current">
           <div className="section-heading-row">
             <div>
-              <h2 id="planning-current">今天的定期事项与计划</h2>
-              <p className="muted">定期事项已在今天出现；不会替你从 To Do 自动挑选。</p>
+              <h2 id="planning-current">已经安排的事</h2>
+              <p className="muted">定期事项已自动加入，其他事项由你挑选。</p>
             </div>
             <button
               type="button"
@@ -187,12 +187,12 @@ export function DailyPlanningPage({
             </button>
           </div>
           <div className="planning-day-columns">
-            <PlanSnapshot title="Plan" items={planning.day.todos} />
-            <PlanSnapshot title="Errands" items={planning.day.errands} />
+            <PlanSnapshot title="今日计划" items={planning.day.todos} />
+            <PlanSnapshot title="零碎事项" items={planning.day.errands} />
           </div>
         </section>
 
-        {groups.map((group) => (
+        {groups.filter((group) => group.items.length > 0).map((group) => (
           <CandidateSection
             key={group.key}
             group={group}
@@ -202,8 +202,8 @@ export function DailyPlanningPage({
           />
         ))}
 
-        <section className="planning-section upcoming-section" aria-labelledby="planning-upcoming">
-          <h2 id="planning-upcoming">未来 7 天摘要</h2>
+        <details className="planning-section upcoming-section">
+          <summary>看看接下来一周</summary>
           <p className="muted">这是查看，不会自动排程。</p>
           {planning.upcoming.length > 0 ? (
             <ul className="upcoming-list">
@@ -217,7 +217,7 @@ export function DailyPlanningPage({
           ) : (
             <p className="muted">未来 7 天暂无已排或定期事项。</p>
           )}
-        </section>
+        </details>
         <footer className="planning-footer">
           <button
             type="button"
@@ -225,7 +225,7 @@ export function DailyPlanningPage({
             disabled={finishing}
             onClick={() => void markReady()}
           >
-            {finishing ? "正在确认…" : "今天计划已就绪"}
+            {finishing ? "正在确认…" : "就这样，开始今天"}
           </button>
         </footer>
       </main>
@@ -311,7 +311,7 @@ function CandidateSection({
                 disabled={busyId !== null}
                 onClick={() => onAdd(item)}
               >
-                {busyId === item.taskId ? "加入中…" : "加入 Plan"}
+                {busyId === item.taskId ? "加入中…" : "加入今天"}
               </button>
             </li>
           ))}
@@ -319,7 +319,7 @@ function CandidateSection({
       ) : null}
       {group.key === "inventory" ? (
         <a href="/inventory" className="open-inventory" onClick={(event) => handleNavClick(event, "/inventory")}>
-          打开 To Do →
+          打开待办 →
         </a>
       ) : null}
     </section>

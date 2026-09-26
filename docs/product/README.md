@@ -14,3 +14,5 @@
 | [open-questions.md](open-questions.md) | v1 已关闭 / 后置问题 |
 | [known-context.md](known-context.md) | 发现阶段输入，不是规格 |
 | [discovery-brief.md](discovery-brief.md) | 拍板前的发现简报，正文可能过时 |
+
+- [日常体验打磨与助手执行控制](daily-experience.md)
