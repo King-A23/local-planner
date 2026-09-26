@@ -29,32 +29,12 @@ from local_planner.runtime import exclusive_uow, planner_txn
 
 LAUNCHERS_NAME = "launchers.json"
 DEFAULT_OPENCODE = {
-    "id": "opencode",
-    "name": "OpenCode",
-    "command": "opencode run -m nassa-deepseek/deepseek-v4-flash {prompt}",
+    "id": "opencode", "name": "OpenCode", "command": "opencode run {prompt}",
 }
-DEFAULT_CODEX = [
-    {
-        "id": f"codex-{model}-{effort}",
-        "name": f"Codex · {label} · {effort}",
-        "command": (
-            f"codex exec --model {model} "
-            f"-c 'model_reasoning_effort=\"{effort}\"' "
-            f"{extra_flags} "
-            "-c 'approval_policy=\"never\"' --sandbox workspace-write "
-            "--add-dir {data_dir} --skip-git-repo-check --ephemeral {prompt}"
-        ),
-    }
-    for model, label, effort, extra_flags in [
-        ("gpt-6-sol", "GPT-6 Sol", "low", ""),
-        (
-            "gpt-6-luna",
-            "GPT-6 Luna",
-            "medium",
-            "-c 'features.fast_mode=true' -c 'service_tier=\"fast\"'",
-        ),
-    ]
-]
+DEFAULT_CODEX = [{
+    "id": "codex", "name": "Codex",
+    "command": "codex exec -c 'approval_policy=\"never\"' --sandbox workspace-write --add-dir {data_dir} --skip-git-repo-check --ephemeral {prompt}",
+}]
 
 PRESET_INSTRUCTIONS = """你在通过 Local Planner 的 CLI（python -m local_planner）代用户改计划。只做用户明确说出的事，不要自行补充。
 
@@ -169,7 +149,7 @@ def launchers_path(root: Path | None = None) -> Path:
 def load_launchers(root: Path | None = None) -> list[Launcher]:
     path = launchers_path(root)
     if not path.exists():
-        items = [Launcher(**row) for row in [DEFAULT_OPENCODE, *DEFAULT_CODEX]]
+        items = [Launcher(**row) for row in [*DEFAULT_CODEX, DEFAULT_OPENCODE]]
         save_launchers(items, root)
         return items
     raw = json.loads(path.read_text(encoding="utf-8"))

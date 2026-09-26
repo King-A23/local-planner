@@ -54,7 +54,8 @@ export function ThemeSwitcher() {
       document.documentElement.setAttribute("data-theme", fromUrl);
       return fromUrl;
     }
-    const saved = localStorage.getItem(STORAGE_KEY) as ThemeId | null;
+    let saved: ThemeId | null = null;
+    try { saved = localStorage.getItem(STORAGE_KEY) as ThemeId | null; } catch { /* optional preference */ }
     if (saved && THEMES.some((t) => t.id === saved)) {
       document.documentElement.setAttribute("data-theme", saved);
       return saved;

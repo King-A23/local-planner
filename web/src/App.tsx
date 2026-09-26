@@ -10,6 +10,8 @@ import { InventoryPage } from "./InventoryPage";
 import { RecurrencesPage } from "./RecurrencesPage";
 import { handleNavClick, navigate, parseRoute } from "./route";
 import { Shell } from "./Shell";
+import { SettingsPage } from "./SettingsPage";
+import { UndoToast } from "./UndoToast";
 
 function useLocation(): { pathname: string; search: string } {
   const [location, setLocation] = useState(() => ({
@@ -77,7 +79,7 @@ export function App() {
         : "today";
   const agentDate = route.kind === "day" ? route.date : null;
   const activeSection =
-    route.kind === "inventory"
+    route.kind === "settings" ? "settings" : route.kind === "inventory"
       ? "inventory"
       : route.kind === "recurrences"
         ? "recurrences"
@@ -85,8 +87,13 @@ export function App() {
           ? undefined
           : "today";
 
+  const refreshAll = useCallback(() => { setAgentRunTick((tick) => tick + 1); refreshMeta(); }, [refreshMeta]);
+  useEffect(() => { if (route.kind === "settings") setAgentOpen(false); }, [route.kind]);
+
   let body;
-  if (route.kind === "inventory") {
+  if (route.kind === "settings") {
+    body = <SettingsPage onChanged={refreshAll} />;
+  } else if (route.kind === "inventory") {
     if (!meta) {
       body = (
         <main className="page">
@@ -207,6 +214,7 @@ export function App() {
       >
         {body}
       </Shell>
+      <UndoToast onChanged={refreshAll} />
       <AgentPanel
         onStatusChange={setAgentStatus}
         open={agentOpen}

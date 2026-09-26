@@ -19,6 +19,10 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from local_planner.domain.undo import delete_with_undo, undo_delete
+from local_planner.recovery import ensure_daily_backup
+from local_planner.launcher_health import check_launcher
+from local_planner.http.recovery_routes import mount_recovery
 from local_planner.agent_receipts import build_agent_receipt
 from local_planner.agent_runs import AgentRuns, RunControl
 from local_planner.clock import Clock
@@ -139,6 +143,12 @@ def _locked(ctx: AppContext, fn: Callable[[str], dict[str, Any]]) -> dict[str, A
     with PLANNER_LOCK:
         with interprocess_lock(ctx.data_dir):
             try:
+                conn = getattr(ctx.uow, "conn", None)
+                if conn is not None:
+                    try:
+                        ensure_daily_backup(conn, ctx.data_dir, ctx.clock.today())
+                    except (OSError, sqlite3.Error):
+                        logger.exception("automatic backup failed")
                 with planner_txn(ctx.clock, ctx.uow) as today:
                     return fn(today)
             except sqlite3.OperationalError as exc:
@@ -227,6 +237,19 @@ def create_app(
         data_dir = _data_dir_from_uow(uow)
     ctx = AppContext(clock=clock, uow=uow, port=port, dev=dev, data_dir=data_dir)
     runs = AgentRuns(data_dir)
+    deletions: dict[str, tuple] = {}
+
+    def remember_deletion(kind: str, entity_id: str) -> dict:
+        change = delete_with_undo(clock, uow, kind, entity_id)
+        token = str(uuid.uuid4())
+        now = time.monotonic()
+        for key, record in list(deletions.items()):
+            if now - record[0] > 300:
+                del deletions[key]
+        while len(deletions) >= 100:
+            del deletions[next(iter(deletions))]
+        deletions[token] = (now, change, uow.meta.get("recovery_generation"))
+        return {"token": token, "title": change.before.title}
 
     @asynccontextmanager
     async def lifespan(_app):
@@ -470,12 +493,11 @@ def create_app(
 
     @app.delete("/api/errands/{errand_id}")
     def delete_errand(errand_id: str) -> dict[str, Any]:
-        return _locked(
-            ctx,
-            lambda today: day_plan_payload(
-                cmds.delete_errand(ctx.clock, ctx.uow, errand_id), today
-            ),
-        )
+        def inner(today):
+            undo = remember_deletion("errand", errand_id)
+            change = deletions[undo["token"]][1]
+            return day_plan_payload(cmds.open_day(clock, uow, change.before.day_date), today) | {"undo": undo}
+        return _locked(ctx, inner)
 
     @app.patch("/api/errands/{errand_id}")
     def rename_errand(errand_id: str, body: TitleBody) -> dict[str, Any]:
@@ -508,8 +530,8 @@ def create_app(
     @app.delete("/api/tasks/{task_id}")
     def delete_task(task_id: str) -> dict[str, Any]:
         def inner(today: str) -> dict[str, Any]:
-            cmds.delete_task(ctx.clock, ctx.uow, task_id)
-            return command_payload(None, today)
+            undo = remember_deletion("task", task_id)
+            return command_payload(None, today) | {"undo": undo}
 
         return _locked(ctx, inner)
 
@@ -679,8 +701,8 @@ def create_app(
     @app.delete("/api/recurrences/{series_id}")
     def delete_recurrence(series_id: str) -> dict[str, Any]:
         def apply_delete(_today: str) -> dict[str, Any]:
-            cmds.delete_recurrence(ctx.clock, ctx.uow, series_id)
-            return {"ok": True}
+            undo = remember_deletion("recurrence", series_id)
+            return {"ok": True, "undo": undo}
 
         return _locked(
             ctx,
@@ -704,6 +726,27 @@ def create_app(
                 cmds.complete_planning_today(ctx.clock, ctx.uow), today
             ),
         )
+
+    @app.post("/api/undo/{token}")
+    def undo_deletion(token: str):
+        def inner(today):
+            record = deletions.get(token)
+            if record is None or time.monotonic() - record[0] > 300:
+                raise Conflict("撤销已过期，必要时可从设置中恢复备份")
+            if record[2] != uow.meta.get("recovery_generation"):
+                raise Conflict("数据已经恢复过，无法撤销此前的操作")
+            undo_delete(clock, uow, record[1])
+            return {"ok": True, "today": today}
+        result = _locked(ctx, inner)
+        deletions.pop(token, None)
+        return result
+
+    @app.post("/api/launchers/{launcher_id}/check")
+    def check_agent(launcher_id: str):
+        item = next((item for item in load_launchers(ctx.data_dir) if item.id == launcher_id), None)
+        if item is None:
+            raise NotFound("找不到该助手")
+        return check_launcher(item)
 
     @app.get("/api/launchers")
     def get_launchers() -> dict[str, Any]:
@@ -816,6 +859,8 @@ def create_app(
     @app.post("/api/agent-runs/{run_id}/{action}")
     def control_agent(run_id: str, action: Literal["pause", "resume", "stop"]) -> dict[str, Any]:
         return runs.control(run_id, action)
+
+    mount_recovery(app, ctx, PLANNER_LOCK)
 
     if dist_dir is not None:
         mount_spa(app, dist_dir)

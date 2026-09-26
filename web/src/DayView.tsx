@@ -1,3 +1,4 @@
+import { WelcomeTip } from "./WelcomeTip";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import {
@@ -371,17 +372,8 @@ export function DayView({
         <p className="sealed">这是过去的记录，仅供回看。</p>
       ) : null}
       {error ? <p className="error">{error}</p> : null}
-      {plan.isToday && planningStatus === "unplanned" ? (
-        <section className="planning-prompt" aria-labelledby="planning-prompt-title">
-          <div>
-            <h2 id="planning-prompt-title">给今天留一点余地</h2>
-            <p>直接记下要做的事，也可以从待办里挑几件。</p>
-          </div>
-          <button type="button" className="button-secondary" onClick={onStartPlanning}>
-            整理今天
-          </button>
-        </section>
-      ) : null}
+      {plan.isToday && <WelcomeTip />}
+      {plan.isToday && planningStatus === "unplanned" && <div className="planning-shortcut"><button type="button" className="linkish quiet" onClick={onStartPlanning}>从待办中整理今天 →</button></div>}
       {(() => {
         const total = plan.todos.length + plan.errands.length;
         if (total === 0) return null;

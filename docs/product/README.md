@@ -16,3 +16,5 @@
 | [discovery-brief.md](discovery-brief.md) | 拍板前的发现简报，正文可能过时 |
 
 - [日常体验打磨与助手执行控制](daily-experience.md)
+
+- [第一批用户的使用体验](first-users.md)

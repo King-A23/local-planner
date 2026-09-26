@@ -48,7 +48,8 @@ def test_only_stopped_recurrence_can_be_deleted_without_losing_history(
 
     deleted = client.delete(f"/api/recurrences/{series_id}")
     assert deleted.status_code == 200
-    assert deleted.json() == {"ok": True}
+    assert deleted.json()["ok"] is True
+    assert deleted.json()["undo"]["token"]
     assert client.get("/api/recurrences").json() == {"items": []}
     today = client.get("/api/days/2026-08-30").json()
     assert today["errands"][0]["recurrence"]["seriesId"] == series_id

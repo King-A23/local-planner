@@ -3,14 +3,13 @@ import { useState, type ReactNode } from "react";
 import { MonthCalendar } from "./Calendar";
 import { DISPLAY_NAME } from "./constants";
 import { handleNavClick } from "./route";
-import { ThemeSwitcher } from "./ThemeSwitcher";
 
 type ShellProps = {
   children: ReactNode;
   inventoryCount?: number;
   today?: string;
   viewedDate?: string;
-  activeSection?: "today" | "inventory" | "recurrences";
+  activeSection?: "today" | "inventory" | "recurrences" | "settings";
   agentOpen: boolean;
   agentStatus?: string | null;
   onOpenAgent: (trigger: HTMLButtonElement) => void;
@@ -80,7 +79,7 @@ export function Shell({
           >
             日历
           </button>
-          <ThemeSwitcher />
+          <a href="/settings" aria-current={activeSection === "settings" ? "page" : undefined} onClick={(e) => handleNavClick(e, "/settings")}>设置</a>
           {calOpen && today ? (
             <MonthCalendar
               today={today}

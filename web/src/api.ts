@@ -139,6 +139,8 @@ async function readJson<T>(response: Response): Promise<T> {
       rec.message ?? "请求失败",
     );
   }
+  const undo = (body as { undo?: UndoNotice }).undo;
+  if (undo) window.dispatchEvent(new CustomEvent("planner:deleted", { detail: undo }));
   return body as T;
 }
 
@@ -398,4 +400,16 @@ export function isDayPlan(
   value: DayPlan | InventoryItem,
 ): value is DayPlan {
   return "todos" in value && "date" in value;
+}
+
+
+export type UndoNotice = { token: string; title: string };
+export function undoDeletion(token: string): Promise<{ ok: boolean }> {
+  return jsonRequest(`/api/undo/${token}`, { method: "POST" }).then((r) => readJson<{ ok: boolean }>(r));
+}
+export type Backup = { name: string; kind: string; createdAt: string; createdLabel: string; bytes: number };
+export type Launcher = { id: string; name: string; command: string };
+export type LauncherCheck = { status: string; message: string };
+export function settingsRequest<T>(url: string, method = "GET", body?: unknown): Promise<T> {
+  return jsonRequest(url, { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }).then((r) => readJson<T>(r));
 }

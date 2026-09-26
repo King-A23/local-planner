@@ -1,7 +1,7 @@
 import AppKit
 import WebKit
 
-final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate {
     private var window: NSWindow!
     private var webView: WKWebView!
     private var backend: Process?
@@ -81,6 +81,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         }
         let app = menu("Local Planner")
         add(app, "关于 Local Planner", #selector(NSApplication.orderFrontStandardAboutPanel(_:)))
+        add(app, "设置…", #selector(goSettings), ",", target: self)
         app.addItem(.separator())
         add(app, "隐藏 Local Planner", #selector(NSApplication.hide(_:)), "h")
         add(app, "显示全部", #selector(NSApplication.unhideAllApplications(_:)))
@@ -202,7 +203,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         guard let url = navigationAction.request.url else { decisionHandler(.cancel); return }
-        if isLocal(url) { decisionHandler(.allow); return }
+        if isLocal(url) { decisionHandler(navigationAction.shouldPerformDownload ? .download : .allow); return }
         if navigationAction.navigationType == .linkActivated && ["https", "http", "mailto"].contains(url.scheme ?? "") {
             NSWorkspace.shared.open(url)
         }
@@ -213,6 +214,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
                  for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
         if let url = navigationAction.request.url, isLocal(url) { webView.load(URLRequest(url: url)) }
         return nil
+    }
+
+    func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse,
+                 decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
+        guard let url = navigationResponse.response.url, isLocal(url) else { decisionHandler(.cancel); return }
+        decisionHandler(navigationResponse.canShowMIMEType ? .allow : .download)
+    }
+
+    func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
+        download.delegate = self
+    }
+
+    func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, didBecome download: WKDownload) {
+        download.delegate = self
+    }
+
+    func download(_ download: WKDownload, decideDestinationUsing response: URLResponse,
+                  suggestedFilename: String, completionHandler: @escaping (URL?) -> Void) {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = suggestedFilename
+        panel.title = "保存备份"
+        panel.canCreateDirectories = true
+        panel.beginSheetModal(for: window) { result in
+            completionHandler(result == .OK ? panel.url : nil)
+        }
+    }
+
+    func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) {
+        if (error as NSError).code == NSURLErrorCancelled { return }
+        let alert = NSAlert()
+        alert.messageText = "备份未保存"
+        alert.informativeText = "请检查目标文件夹和磁盘空间后重试。"
+        alert.beginSheetModal(for: window)
+    }
+
+    func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters,
+                 initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping ([URL]?) -> Void) {
+        let panel = NSOpenPanel()
+        panel.title = "选择 Local Planner 备份"
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.beginSheetModal(for: window) { result in
+            completionHandler(result == .OK ? panel.urls : nil)
+        }
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
@@ -288,6 +333,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     @objc private func goToday() { navigate("") }
     @objc private func goInventory() { navigate("inventory") }
     @objc private func goRecurrences() { navigate("recurrences") }
+    @objc private func goSettings() { navigate("settings") }
     @objc private func reload() { webView?.reload() }
     @objc private func zoomIn() { if let webView { webView.pageZoom = min(2, webView.pageZoom + 0.1) } }
     @objc private func zoomOut() { if let webView { webView.pageZoom = max(0.6, webView.pageZoom - 0.1) } }

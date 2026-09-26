@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
-import { errorMessage } from "./api";
+import { errorMessage, settingsRequest, type LauncherCheck } from "./api";
+import { navigate } from "./route";
 
 type Launcher = { id: string; name: string; command: string };
 type Receipt = {
@@ -48,6 +49,8 @@ export function AgentPanel({ open, onClose, onOpen, triggerRef, surface, date, o
   const [error, setError] = useState<string | null>(null);
   const [showMenu, setShowMenu] = useState(false);
   const [dismissed, setDismissed] = useState<string | null>(null);
+  const [environment, setEnvironment] = useState<LauncherCheck | null>(null);
+  const [checking, setChecking] = useState(false);
   const promptRef = useRef<HTMLTextAreaElement>(null);
   const actionRef = useRef(false);
   const requestRef = useRef<{ key: string; id: string } | null>(null);
@@ -57,6 +60,31 @@ export function AgentPanel({ open, onClose, onOpen, triggerRef, surface, date, o
   const active = Boolean(run && ACTIVE.has(run.status));
   const paused = run?.status === "paused";
   const edited = Boolean(run && prompt.trim() !== run.prompt);
+  const blocked = environment && ["missing", "invalid", "login_required"].includes(environment.status);
+
+  useEffect(() => {
+    if (!open || !selected || active) return;
+    let stopped = false;
+    setEnvironment(null); setChecking(true);
+    settingsRequest<LauncherCheck>(`/api/launchers/${selected}/check`, "POST").then((result) => {
+      if (!stopped) setEnvironment(result);
+    }).catch(() => { if (!stopped) setEnvironment({ status: "unknown", message: "暂时无法检测环境，可在设置中重试。" }); })
+      .finally(() => { if (!stopped) setChecking(false); });
+    return () => { stopped = true; };
+  }, [open, selected, active]);
+
+  useEffect(() => {
+    const reload = () => {
+      request<{ items: Launcher[] }>("/api/launchers").then(({ items }) => {
+        setItems(items);
+        const saved = readPreference(SELECTION_KEY);
+        setSelected(items.some((item) => item.id === saved) ? saved : items[0]?.id ?? "");
+        setEnvironment(null);
+      }).catch((err) => setError(errorMessage(err)));
+    };
+    window.addEventListener("planner:launchers-changed", reload);
+    return () => window.removeEventListener("planner:launchers-changed", reload);
+  }, []);
 
   useEffect(() => { onStatusChange?.(active && run ? run.status : null); }, [active, run?.status, onStatusChange]);
   useEffect(() => { savePreference(DRAFT_KEY, prompt); }, [prompt]);
@@ -131,18 +159,7 @@ export function AgentPanel({ open, onClose, onOpen, triggerRef, surface, date, o
     setShowMenu(false);
   }
   function send() {
-    if (!active && synced) void perform(() => submitPrompt());
-  }
-  function removeLauncher() {
-    if (active || !selected) return;
-    void perform(async () => {
-      const response = await fetch(`/api/launchers/${selected}`, { method: "DELETE" });
-      if (!response.ok) throw new Error("无法移除助手，请重试");
-      const { items: next } = await request<{ items: Launcher[] }>("/api/launchers");
-      setItems(next);
-      setSelected(next[0]?.id ?? "");
-      setShowMenu(false);
-    });
+    if (!active && synced && !blocked && !checking) void perform(() => submitPrompt());
   }
   function control(action: "pause" | "resume" | "stop") {
     if (!run) return;
@@ -188,6 +205,7 @@ export function AgentPanel({ open, onClose, onOpen, triggerRef, surface, date, o
           <button type="button" className="linkish quiet" onClick={onClose} aria-label="收起计划助手">收起</button>
         </div>
         {!synced && <p className="agent-connection" role="status">正在重新连接助手，执行状态确认后可继续操作…</p>}
+        {!active && (blocked || !items.length) && <div className="agent-setup-hint"><span>{environment?.message ?? "连接一个助手，就能用一句话调整计划。"}</span><button type="button" onClick={() => { onClose(); navigate("/settings"); }}>连接助手</button></div>}
         {error && <p className="error agent-feedback" role="alert">{error}</p>}
         {feedback && run && <div className="agent-floating-receipt-card agent-run-card">
           <div className="agent-floating-receipt-header">
@@ -213,7 +231,6 @@ export function AgentPanel({ open, onClose, onOpen, triggerRef, surface, date, o
         {showMenu && <div className="agent-plus-menu">
           <div className="agent-plus-menu-header">试着这样说</div>
           {["把待办中的「任务名称」加入今天", "今天下午三点开始「任务名称」", "每周五安排「任务名称」"].map((example) => <button key={example} type="button" className="agent-plus-menu-item" onClick={() => { setPrompt(example); setShowMenu(false); promptRef.current?.focus(); }}>{example}</button>)}
-          {selected && <div className="agent-plus-menu-footer"><button type="button" className="agent-plus-menu-delete" disabled={active || pending} onClick={removeLauncher}>移除此助手</button></div>}
         </div>}
         <form className="agent-composer" onSubmit={(event) => { event.preventDefault(); send(); }}>
           <textarea ref={promptRef} id="agent-prompt" aria-label={paused ? "调整执行指令" : "给计划助手的指令"} rows={1} value={prompt}
@@ -233,9 +250,10 @@ export function AgentPanel({ open, onClose, onOpen, triggerRef, surface, date, o
               {items.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
             </select>
             <span className="agent-input-hint">{paused ? "修改后点击继续" : "Enter 发送 · Shift+Enter 换行"}</span>
-            {!active && <button type="submit" className="button-primary" disabled={!synced || pending || !selected || !prompt.trim()}>{pending ? "正在提交…" : "发送"}</button>}
+            {!active && <button type="submit" className="button-primary" disabled={!synced || pending || checking || Boolean(blocked) || !selected || !prompt.trim()}>{checking ? "检测中…" : pending ? "正在提交…" : "发送"}</button>}
           </div>
         </form>
+        {!active && <p className="agent-privacy-note">发送会将指令和计划上下文交给所选助手。<button type="button" className="linkish quiet" onClick={() => { onClose(); navigate("/settings"); }}>设置</button></p>}
       </div>
     </aside>, document.body,
   );

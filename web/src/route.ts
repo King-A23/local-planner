@@ -4,6 +4,7 @@ export type Route =
   | { kind: "today" }
   | { kind: "day"; date: string }
   | { kind: "inventory" }
+  | { kind: "settings" }
   | { kind: "recurrences" }
   | { kind: "todayPlanning" }
   | { kind: "notfound" };
@@ -14,6 +15,7 @@ export function parseRoute(pathname: string): Route {
   if (pathname === "/" || pathname === "") {
     return { kind: "today" };
   }
+  if (pathname === "/settings") return { kind: "settings" };
   if (pathname === "/inventory") {
     return { kind: "inventory" };
   }

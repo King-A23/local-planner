@@ -60,7 +60,7 @@ def test_runner_passes_prompt_and_context(tmp_path, monkeypatch):
 def test_default_opencode_template_is_stored(tmp_path):
     items = load_launchers(tmp_path)
     assert any(
-        "deepseek-v4-flash" in item.command and "{prompt}" in item.command
+        item.command == "opencode run {prompt}"
         for item in items
     )
     added = add_launcher("Other", "echo {prompt}", tmp_path)
@@ -137,33 +137,24 @@ def test_codex_presets_upgrade_once_and_preserve_customizations(tmp_path):
         {"id": "custom", "name": "Custom", "command": "echo {prompt}"}
     ]}))
     items = load_launchers(tmp_path)
-    assert len(items) == 3
+    assert len(items) == 2
     assert items[0].id == "custom"
-    sol, luna = items[1:]
-    update_launcher(sol.id, "My Sol", "echo custom", tmp_path)
-    delete_launcher(luna.id, tmp_path)
+    preset = items[1]
+    update_launcher(preset.id, "My Codex", "echo custom", tmp_path)
+    assert load_launchers(tmp_path)[1].command == "echo custom"
+    delete_launcher(preset.id, tmp_path)
     reloaded = load_launchers(tmp_path)
-    assert [(item.id, item.name) for item in reloaded] == [
-        ("custom", "Custom"), (sol.id, "My Sol")
-    ]
-    assert reloaded[1].command == "echo custom"
+    assert [(item.id, item.name) for item in reloaded] == [("custom", "Custom")]
 
 
-def test_codex_presets_expand_model_effort_and_data_path(tmp_path):
-    presets = load_launchers(tmp_path)[1:]
-    assert len(presets) == 2
-    for item, model, effort in zip(
-        presets, ["gpt-6-sol", "gpt-6-luna"], ["low", "medium"], strict=True
-    ):
-        argv = expand_command(item.command, "九点开始写设计", tmp_path / "context.json", tmp_path / "data with spaces")
-        assert argv[:4] == ["codex", "exec", "--model", model]
-        assert f'model_reasoning_effort="{effort}"' in argv
-        if model == "gpt-6-luna":
-            assert "features.fast_mode=true" in argv
-            assert 'service_tier="fast"' in argv
-        assert argv[argv.index("--add-dir") + 1] == str(tmp_path / "data with spaces")
-        assert argv[argv.index("--sandbox") + 1] == "workspace-write"
-        assert argv[-1] == "九点开始写设计"
+def test_codex_preset_uses_users_model_and_data_path(tmp_path):
+    item = next(item for item in load_launchers(tmp_path) if item.id == "codex")
+    argv = expand_command(item.command, "九点开始写设计", tmp_path / "context.json", tmp_path / "data with spaces")
+    assert argv[:2] == ["codex", "exec"]
+    assert "--model" not in argv
+    assert argv[argv.index("--add-dir") + 1] == str(tmp_path / "data with spaces")
+    assert argv[argv.index("--sandbox") + 1] == "workspace-write"
+    assert argv[-1] == "九点开始写设计"
 
 
 def test_runtime_prompt_cli_works_outside_project(tmp_path, monkeypatch):

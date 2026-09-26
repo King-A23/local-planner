@@ -53,6 +53,8 @@ http://127.0.0.1:8787
 
 ## 备份
 
+桌面应用进入「设置 → 数据与备份」，可立即备份、下载备份文件或确认恢复。每天首次使用时自动备份，保留最近 14 份；恢复前会再保存一份当前数据。详情见 [第一批用户的使用体验](docs/product/first-users.md)。
+
 WAL 模式下不要只拷贝 `planner.sqlite`（会漏掉 `-wal`）。用 SQLite backup API：
 
 ```bash
@@ -63,7 +65,7 @@ python -m local_planner backup ~/Desktop/planner-copy.sqlite
 python -m local_planner backup /path/to/dir
 ```
 
-进程运行时也可以备份。v1 不自动定时备份、不同步网盘。备份 = 复制这个 sqlite 文件。
+进程运行时也可以备份。备份文件可在应用设置中选择并恢复；不会自动同步到网盘。
 
 ## 重置
 

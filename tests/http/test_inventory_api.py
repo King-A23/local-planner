@@ -86,7 +86,8 @@ def test_delete_task_without_history(client: TestClient) -> None:
     item = client.post("/api/inventory/tasks", json={"title": "误建"}).json()
     deleted = client.delete(f"/api/tasks/{item['taskId']}")
     assert deleted.status_code == 200
-    assert deleted.json() == {"ok": True}
+    assert deleted.json()["ok"] is True
+    assert deleted.json()["undo"]["token"]
     assert client.get("/api/inventory").json()["items"] == []
 
 

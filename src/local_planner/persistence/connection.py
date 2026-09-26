@@ -45,10 +45,11 @@ def open_connection(path: str | Path) -> sqlite3.Connection:
 def apply_migrations(conn: sqlite3.Connection, data_dir: Path) -> None:
     """Apply numbered 00N_*.sql files; version truth is schema_migrations only."""
     applied = _applied_versions(conn)
+    existing_database = bool(applied)
     for version, sql_path in _migration_files():
         if version in applied:
             continue
-        if applied:
+        if existing_database:
             _backup_before_migrate(conn, data_dir, version)
         statements = sql_statements(sql_path.read_text(encoding="utf-8"))
         # Open-time exception to UoW-only txns: DDL + version row must be atomic.
