@@ -4,6 +4,7 @@
 
 | 文件 | 作用 |
 | --- | --- |
+| [macos-desktop.md](macos-desktop.md) | macOS 桌面入口、构建安装与进程生命周期 |
 | [v1-requirements.md](v1-requirements.md) | v1 已冻结范围 |
 | [decisions.md](decisions.md) | v1 已拍板决策 D1–D14 |
 | [v2-requirements.md](v2-requirements.md) | v2 已冻结范围 |

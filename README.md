@@ -6,6 +6,21 @@
 
 ## 如何运行
 
+### macOS 桌面应用
+
+双击 `~/Applications/Local Planner.app` 打开独立桌面窗口。待办数据沿用原目录，退出窗口会自动停止桌面服务。已构建的应用包含 Python 与前端，日常使用无需终端。
+
+从源码构建安装：
+
+```bash
+.venv/bin/python -m pip install -e '.[dev]' -r desktop/macos/requirements-build.txt
+.venv/bin/python scripts/build_macos.py --install
+```
+
+需要 Xcode Command Line Tools、Python 3.12+ 和 Node.js。产物在 `dist/macos/`；已有同名应用时不会覆盖。[桌面版说明](docs/product/macos-desktop.md)包含更新方式、菜单快捷键、日志和分发限制。
+
+### 网页与命令行
+
 需要 Python 3.12+ 与 Node.js（构建前端）。
 
 ```bash

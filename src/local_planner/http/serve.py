@@ -6,6 +6,7 @@ import logging
 import os
 import sys
 import threading
+from collections.abc import Callable
 from pathlib import Path
 
 import uvicorn
@@ -83,7 +84,7 @@ class SettlementTimer:
                 logger.exception("periodic ensure_settled failed")
 
 
-def serve(port: int | None = None) -> None:
+def serve(port: int | None = None, *, runner: Callable | None = None) -> None:
     configure_logging()
     port = resolve_port(port)
     clock = resolve_clock()
@@ -119,7 +120,7 @@ def serve(port: int | None = None) -> None:
     timer = SettlementTimer(clock, uow, ddir)
     timer.start()
     try:
-        uvicorn.run(app, **uvicorn_run_kwargs(port))
+        (runner or uvicorn.run)(app, **uvicorn_run_kwargs(port))
     finally:
         timer.stop()
         uow.close()

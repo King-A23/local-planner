@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 from local_planner.clock import Clock
 from local_planner.paths import DB_NAME, data_dir, resolve_clock
 from local_planner.present import context_payload
+from local_planner.processes import agent_process
 from local_planner.runtime import exclusive_uow, planner_txn
 
 LAUNCHERS_NAME = "launchers.json"
@@ -264,6 +265,12 @@ def write_context_file(
     return payload
 
 
+def cli_argv() -> list[str]:
+    if getattr(sys, "frozen", False):
+        return [sys.executable]
+    return [sys.executable, "-m", "local_planner"]
+
+
 def run_launcher(
     launcher: Launcher,
     prompt: str,
@@ -282,7 +289,7 @@ def run_launcher(
         write_context_file(clock, context_file, root)
         cli_prefix = shlex.join([
             "env", f"LOCAL_PLANNER_DATA_DIR={root.resolve()}",
-            sys.executable, "-m", "local_planner",
+            *cli_argv(),
         ])
         composed = compose_prompt(
             prompt, surface=surface, date=date, cli_prefix=cli_prefix
@@ -305,7 +312,7 @@ def run_launcher(
         if extra_env:
             env.update(extra_env)
         try:
-            process = subprocess.Popen(
+            with agent_process(
                 argv,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
@@ -314,9 +321,9 @@ def run_launcher(
                 encoding="utf-8",
                 errors="replace",
                 env=env,
-                start_new_session=True,
-            )
-        except FileNotFoundError as exc:
+            ) as process:
+                return _collect_result(process, argv, launcher, timeout)
+        except OSError as exc:
             return RunResult(
                 ok=False,
                 argv=argv,
@@ -324,52 +331,55 @@ def run_launcher(
                 stdout="",
                 stderr=str(exc),
             )
-        deadline = time.monotonic() + timeout
-        failure_reason = None
-        while True:
-            try:
-                stdout, stderr = process.communicate(
-                    timeout=max(0.001, min(1.0, deadline - time.monotonic()))
-                )
-                break
-            except subprocess.TimeoutExpired as exc:
-                # communicate's partial output is bytes even with text=True.
-                output = (exc.stdout or b"") + (exc.stderr or b"")
-                if output.count(b"tool was called with invalid arguments:") >= 3:
-                    failure_reason = "工具参数格式反复出错（至少 3 次）：已停止执行。当前模型接入无法可靠调用工具，请检查接入配置或选择其他计划助手。"
-                    break
-                if time.monotonic() >= deadline:
-                    failure_reason = "timeout：执行超时，已停止本次进程及其子进程；可能已有部分修改，请核对计划后再重试。"
-                    break
-        if failure_reason:
-            # Kill the whole owned group: descendants may hold stdout/stderr open.
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            stdout, stderr = process.communicate()
-            logger.warning("launcher name=%s stopped: %s", launcher.name, failure_reason)
-            return RunResult(
-                ok=False,
-                argv=argv,
-                returncode=None,
-                stdout=stdout,
-                stderr=stderr + "\n" + failure_reason,
+
+
+def _collect_result(process, argv: list[str], launcher: Launcher, timeout: float) -> RunResult:
+    deadline = time.monotonic() + timeout
+    failure_reason = None
+    while True:
+        try:
+            stdout, stderr = process.communicate(
+                timeout=max(0.001, min(1.0, deadline - time.monotonic()))
             )
-        logger.info(
-            "launcher name=%s ok=%s returncode=%s",
-            launcher.name,
-            process.returncode == 0,
-            process.returncode,
-        )
-        if stdout:
-            logger.debug("launcher stdout=%s", stdout)
-        if stderr:
-            logger.debug("launcher stderr=%s", stderr)
+            break
+        except subprocess.TimeoutExpired as exc:
+            # communicate's partial output is bytes even with text=True.
+            output = (exc.stdout or b"") + (exc.stderr or b"")
+            if output.count(b"tool was called with invalid arguments:") >= 3:
+                failure_reason = "工具参数格式反复出错（至少 3 次）：已停止执行。当前模型接入无法可靠调用工具，请检查接入配置或选择其他计划助手。"
+                break
+            if time.monotonic() >= deadline:
+                failure_reason = "timeout：执行超时，已停止本次进程及其子进程；可能已有部分修改，请核对计划后再重试。"
+                break
+    if failure_reason:
+        # Kill the whole owned group: descendants may hold stdout/stderr open.
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        stdout, stderr = process.communicate()
+        logger.warning("launcher name=%s stopped: %s", launcher.name, failure_reason)
         return RunResult(
-            ok=process.returncode == 0,
+            ok=False,
             argv=argv,
-            returncode=process.returncode,
+            returncode=None,
             stdout=stdout,
-            stderr=stderr,
+            stderr=stderr + "\n" + failure_reason,
         )
+    logger.info(
+        "launcher name=%s ok=%s returncode=%s",
+        launcher.name,
+        process.returncode == 0,
+        process.returncode,
+    )
+    if stdout:
+        logger.debug("launcher stdout=%s", stdout)
+    if stderr:
+        logger.debug("launcher stderr=%s", stderr)
+    return RunResult(
+        ok=process.returncode == 0,
+        argv=argv,
+        returncode=process.returncode,
+        stdout=stdout,
+        stderr=stderr,
+    )
