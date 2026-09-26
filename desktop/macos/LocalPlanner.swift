@@ -80,7 +80,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             menu.addItem(item)
         }
         let app = menu("Local Planner")
-        add(app, "关于 Local Planner", #selector(NSApplication.orderFrontStandardAboutPanel(_:)))
+        add(app, "关于 Local Planner", #selector(goAbout), target: self)
         add(app, "设置…", #selector(goSettings), ",", target: self)
         app.addItem(.separator())
         add(app, "隐藏 Local Planner", #selector(NSApplication.hide(_:)), "h")
@@ -113,6 +113,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         add(win, "最小化", #selector(NSWindow.performMiniaturize(_:)), "m")
         add(win, "缩放", #selector(NSWindow.performZoom(_:)))
         NSApp.windowsMenu = win
+        let help = menu("帮助")
+        add(help, "Local Planner 使用说明", #selector(goHelp), target: self)
+        add(help, "关于作者", #selector(goAbout), target: self)
+        NSApp.helpMenu = help
         NSApp.mainMenu = bar
     }
 
@@ -317,9 +321,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         return .terminateLater
     }
 
-    private func navigate(_ path: String) {
-        guard let baseURL else { return }
-        webView?.load(URLRequest(url: baseURL.appendingPathComponent(path)))
+    private func navigate(_ path: String, fragment: String? = nil) {
+        guard let baseURL,
+              var components = URLComponents(url: baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false) else { return }
+        components.fragment = fragment
+        guard let url = components.url else { return }
+        window?.makeKeyAndOrderFront(nil)
+        webView?.load(URLRequest(url: url))
     }
     @objc private func quickAdd() {
         webView?.evaluateJavaScript("document.querySelector('.add-form input, .inventory-add-form input') !== null") { [weak self] result, _ in
@@ -334,6 +342,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     @objc private func goInventory() { navigate("inventory") }
     @objc private func goRecurrences() { navigate("recurrences") }
     @objc private func goSettings() { navigate("settings") }
+    @objc private func goHelp() { navigate("settings", fragment: "help") }
+    @objc private func goAbout() { navigate("settings", fragment: "about") }
     @objc private func reload() { webView?.reload() }
     @objc private func zoomIn() { if let webView { webView.pageZoom = min(2, webView.pageZoom + 0.1) } }
     @objc private func zoomOut() { if let webView { webView.pageZoom = max(0.6, webView.pageZoom - 0.1) } }

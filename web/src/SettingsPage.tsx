@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { errorMessage, type Backup, type Launcher, type LauncherCheck, settingsRequest } from "./api";
 import { ThemeSwitcher } from "./ThemeSwitcher";
+import { HelpAndAbout } from "./HelpAndAbout";
 import { navigate } from "./route";
 
 const BACKUP_LABELS: Record<string, string> = { auto: "自动备份", manual: "手动备份", "before-restore": "恢复前备份", imported: "导入的备份", migration: "升级前备份" };
@@ -153,12 +154,6 @@ export function SettingsPage({ onChanged }: { onChanged: () => void }) {
     </section>
 
     <section className="settings-section"><div className="settings-inline"><h2>外观</h2><ThemeSwitcher /></div></section>
-    <details className="settings-details settings-guide"><summary>简单使用说明</summary>
-      <dl><dt>今天</dt><dd>写下今天想做的事，按回车添加，做完勾选。⌘N 可快速开始输入。</dd>
-        <dt>待办</dt><dd>收下以后要做的事，需要时再加入今天。未完成的计划会在第二天回到这里。</dd>
-        <dt>零碎事项</dt><dd>只属于当天的小事。未完成的事项会留在当天历史中，不会带到明天。</dd>
-        <dt>定期事项</dt><dd>每天或每周重复的安排。暂停后不再生成，恢复后继续。</dd></dl>
-      <p className="settings-caption">日期按北京时间（Asia/Shanghai）计算。</p>
-    </details>
+    <HelpAndAbout />
   </main>;
 }

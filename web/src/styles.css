@@ -3046,6 +3046,26 @@ select:focus-visible {
 .launcher-editor textarea { width: 100%; font-family: ui-monospace, monospace; font-size: .85rem; resize: vertical; }
 .settings-guide dt { font-weight: 600; margin: 1rem 0 .3rem; }
 .settings-guide dd { margin: 0; color: var(--color-muted); font-size: .9rem; line-height: 1.7; }
+.settings-help { border-bottom: 0; }
+.settings-help > details { scroll-margin-top: 1.5rem; }
+.settings-help > details > summary { color: var(--color-page-ink); font-size: .95rem; padding: .35rem 0; }
+.help-content { padding: 0 .15rem .5rem; }
+.help-content h3 { font-size: .94rem; margin: 1.65rem 0 .65rem; }
+.help-content h3:first-child { margin-top: .5rem; }
+.help-content p { line-height: 1.75; }
+.help-steps { padding-left: 1.35rem; font-size: .9rem; color: var(--color-muted); line-height: 1.8; }
+.help-steps li + li { margin-top: .35rem; }
+.help-shortcuts { display: grid; gap: .75rem; }
+.help-shortcuts > div { display: grid; grid-template-columns: minmax(125px, 1fr) 2fr; align-items: baseline; gap: .75rem; }
+.help-shortcuts dt { margin: 0; }
+.help-shortcuts kbd { font-family: inherit; font-size: .82rem; font-weight: 500; }
+.about-product { display: flex; flex-wrap: wrap; align-items: baseline; gap: .7rem; }
+.about-product h3 { margin-bottom: 0; }
+.about-author { display: flex; align-items: center; gap: 1rem; margin: 1.5rem 0; }
+.about-author img { display: block; border-radius: 50%; border: 1px solid var(--color-border-subtle); }
+.about-author h3 { margin: 0; }
+.about-author p { margin: .25rem 0; }
+.about-author a { font-size: .88rem; }
 .welcome-tip { display: flex; gap: 1rem; align-items: center; justify-content: space-between; padding: 1rem 1.15rem; border: 1px solid var(--color-border-subtle); border-radius: .6rem; margin: 1.1rem 0; background: var(--color-card-bg); }
 .welcome-tip strong { font-size: .95rem; font-weight: 550; }
 .welcome-tip p { font-size: .86rem; color: var(--color-muted); margin: .4rem 0 0; line-height: 1.65; }
