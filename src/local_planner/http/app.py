@@ -17,8 +17,11 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from local_planner.agent_receipts import build_agent_receipt
 from local_planner.clock import Clock
 from local_planner.domain import commands as cmds
+from local_planner.domain.commands import UNSET
+from local_planner.domain.recurrence import UNSET as RECURRENCE_UNSET
 from local_planner.domain.errors import (
     Conflict,
     DaySealed,
@@ -31,9 +34,19 @@ from local_planner.http.spa import mount_spa
 from local_planner.present import (
     calendar_payload,
     command_payload,
+    context_payload,
     day_plan_payload,
     inventory_item_payload,
     meta_payload,
+    planning_payload,
+    recurrence_payload,
+)
+from local_planner.launchers import (
+    add_launcher,
+    delete_launcher,
+    load_launchers,
+    run_launcher,
+    update_launcher,
 )
 from local_planner.runtime import InternalError, LockTimeout, interprocess_lock, planner_txn
 
@@ -41,6 +54,7 @@ logger = logging.getLogger(__name__)
 
 PLANNER_LOCK = threading.Lock()
 DEFAULT_PORT = 8787
+HEALTH_SERVICE = "local-planner"
 _MUTATING = {"POST", "PUT", "PATCH", "DELETE"}
 
 
@@ -55,10 +69,48 @@ class AppContext:
 
 class TitleBody(BaseModel):
     title: str
+    startClock: str | None = None
+    endClock: str | None = None
+    targetDate: str | None = None
 
 
 class DateBody(BaseModel):
-    date: str
+    date: str | None = None
+
+
+class ClockBody(BaseModel):
+    startClock: str | None = None
+    endClock: str | None = None
+
+
+class LauncherBody(BaseModel):
+    name: str
+    command: str
+
+
+class PromptBody(BaseModel):
+    prompt: str
+    surface: str = "today"
+    date: str | None = None
+
+
+class RecurrenceCreateBody(BaseModel):
+    kind: str
+    title: str
+    frequency: str
+    weekdays: list[str] | None = None
+    startDate: str
+    defaultStartClock: str | None = None
+    defaultEndClock: str | None = None
+
+
+class RecurrenceUpdateBody(BaseModel):
+    title: str | None = None
+    frequency: str | None = None
+    weekdays: list[str] | None = None
+    startDate: str | None = None
+    defaultStartClock: str | None = None
+    defaultEndClock: str | None = None
 
 
 class TaskOrderBody(BaseModel):
@@ -69,9 +121,9 @@ class ErrandOrderBody(BaseModel):
     errandIds: list[str]
 
 
-def health() -> dict[str, bool]:
+def health() -> dict[str, bool | str]:
     """Liveness only: no lock, no settle, no data."""
-    return {"ok": True}
+    return {"ok": True, "service": HEALTH_SERVICE}
 
 
 def _locked(ctx: AppContext, fn: Callable[[str], dict[str, Any]]) -> dict[str, Any]:
@@ -255,7 +307,7 @@ def create_app(
         )
 
     @app.get("/api/health")
-    def health_route() -> dict[str, bool]:
+    def health_route() -> dict[str, bool | str]:
         return health()
 
     @app.get("/api/meta")
@@ -302,7 +354,14 @@ def create_app(
         return _locked(
             ctx,
             lambda today: day_plan_payload(
-                cmds.add_todo_on_day(ctx.clock, ctx.uow, day_date, body.title),
+                cmds.add_todo_on_day(
+                    ctx.clock,
+                    ctx.uow,
+                    day_date,
+                    body.title,
+                    body.startClock,
+                    body.endClock,
+                ),
                 today,
             ),
         )
@@ -312,7 +371,9 @@ def create_app(
         return _locked(
             ctx,
             lambda today: command_payload(
-                cmds.add_to_inventory(ctx.clock, ctx.uow, body.title), today
+                cmds.add_to_inventory(
+                    ctx.clock, ctx.uow, body.title, body.targetDate
+                ), today
             ),
         )
 
@@ -321,7 +382,7 @@ def create_app(
         return _locked(
             ctx,
             lambda today: day_plan_payload(
-                cmds.schedule_to_date(ctx.clock, ctx.uow, task_id, body.date),
+                cmds.schedule_to_date(ctx.clock, ctx.uow, task_id, body.date or ""),
                 today,
             ),
         )
@@ -360,7 +421,14 @@ def create_app(
         return _locked(
             ctx,
             lambda today: day_plan_payload(
-                cmds.add_errand(ctx.clock, ctx.uow, day_date, body.title), today
+                cmds.add_errand(
+                    ctx.clock,
+                    ctx.uow,
+                    day_date,
+                    body.title,
+                    body.startClock,
+                    body.endClock,
+                ), today
             ),
         )
 
@@ -410,6 +478,15 @@ def create_app(
             ),
         )
 
+    @app.post("/api/inventory/tasks/{task_id}/complete")
+    def complete_inventory_task(task_id: str) -> dict[str, Any]:
+        return _locked(
+            ctx,
+            lambda today: day_plan_payload(
+                cmds.complete_inventory_task(ctx.clock, ctx.uow, task_id), today
+            ),
+        )
+
     @app.delete("/api/tasks/{task_id}")
     def delete_task(task_id: str) -> dict[str, Any]:
         def inner(today: str) -> dict[str, Any]:
@@ -428,6 +505,51 @@ def create_app(
             ),
         )
 
+    @app.patch("/api/tasks/{task_id}/target")
+    def set_target(task_id: str, body: DateBody) -> dict[str, Any]:
+        return _locked(
+            ctx,
+            lambda today: command_payload(
+                cmds.set_target_date(ctx.clock, ctx.uow, task_id, body.date),
+                today,
+            ),
+        )
+
+    @app.patch("/api/days/{day_date}/todos/{task_id}/clocks")
+    def set_todo_clocks(
+        day_date: str, task_id: str, body: ClockBody
+    ) -> dict[str, Any]:
+        return _locked(
+            ctx,
+            lambda today: day_plan_payload(
+                cmds.set_plan_clocks(
+                    ctx.clock,
+                    ctx.uow,
+                    day_date,
+                    task_id,
+                    body.startClock if "startClock" in body.model_fields_set else UNSET,
+                    body.endClock if "endClock" in body.model_fields_set else UNSET,
+                ),
+                today,
+            ),
+        )
+
+    @app.patch("/api/errands/{errand_id}/clocks")
+    def set_errand_clocks(errand_id: str, body: ClockBody) -> dict[str, Any]:
+        return _locked(
+            ctx,
+            lambda today: day_plan_payload(
+                cmds.set_errand_clocks(
+                    ctx.clock,
+                    ctx.uow,
+                    errand_id,
+                    body.startClock if "startClock" in body.model_fields_set else UNSET,
+                    body.endClock if "endClock" in body.model_fields_set else UNSET,
+                ),
+                today,
+            ),
+        )
+
     @app.put("/api/days/{day_date}/errands/order")
     def reorder_errands(day_date: str, body: ErrandOrderBody) -> dict[str, Any]:
         return _locked(
@@ -437,6 +559,210 @@ def create_app(
                 today,
             ),
         )
+
+    @app.get("/api/recurrences")
+    def list_recurrences() -> dict[str, Any]:
+        return _locked(
+            ctx,
+            lambda today: {
+                "items": [
+                    recurrence_payload(item, today)
+                    for item in cmds.list_recurrences(ctx.uow)
+                ]
+            },
+        )
+
+    @app.post("/api/recurrences")
+    def create_recurrence(body: RecurrenceCreateBody) -> dict[str, Any]:
+        return _locked(
+            ctx,
+            lambda today: recurrence_payload(
+                cmds.create_recurrence(
+                    ctx.clock,
+                    ctx.uow,
+                    kind=body.kind,
+                    title=body.title,
+                    frequency=body.frequency,
+                    weekdays=body.weekdays,
+                    start_date=body.startDate,
+                    default_start_clock=body.defaultStartClock,
+                    default_end_clock=body.defaultEndClock,
+                ),
+                today,
+            ),
+        )
+
+    @app.patch("/api/recurrences/{series_id}")
+    def patch_recurrence(
+        series_id: str, body: RecurrenceUpdateBody
+    ) -> dict[str, Any]:
+        fields = body.model_fields_set
+        return _locked(
+            ctx,
+            lambda today: recurrence_payload(
+                cmds.update_recurrence(
+                    ctx.clock,
+                    ctx.uow,
+                    series_id,
+                    title=body.title if "title" in fields else RECURRENCE_UNSET,
+                    frequency=(
+                        body.frequency
+                        if "frequency" in fields
+                        else RECURRENCE_UNSET
+                    ),
+                    weekdays=(
+                        body.weekdays if "weekdays" in fields else RECURRENCE_UNSET
+                    ),
+                    start_date=(
+                        body.startDate if "startDate" in fields else RECURRENCE_UNSET
+                    ),
+                    default_start_clock=(
+                        body.defaultStartClock
+                        if "defaultStartClock" in fields
+                        else RECURRENCE_UNSET
+                    ),
+                    default_end_clock=(
+                        body.defaultEndClock
+                        if "defaultEndClock" in fields
+                        else RECURRENCE_UNSET
+                    ),
+                ),
+                today,
+            ),
+        )
+
+    @app.post("/api/recurrences/{series_id}/pause")
+    def pause_recurrence(series_id: str) -> dict[str, Any]:
+        return _locked(
+            ctx,
+            lambda today: recurrence_payload(
+                cmds.pause_recurrence(ctx.clock, ctx.uow, series_id), today
+            ),
+        )
+
+    @app.post("/api/recurrences/{series_id}/resume")
+    def resume_recurrence(series_id: str) -> dict[str, Any]:
+        return _locked(
+            ctx,
+            lambda today: recurrence_payload(
+                cmds.resume_recurrence(ctx.clock, ctx.uow, series_id), today
+            ),
+        )
+
+    @app.post("/api/recurrences/{series_id}/stop")
+    def stop_recurrence(series_id: str) -> dict[str, Any]:
+        return _locked(
+            ctx,
+            lambda today: recurrence_payload(
+                cmds.stop_recurrence(ctx.clock, ctx.uow, series_id), today
+            ),
+        )
+
+    @app.delete("/api/recurrences/{series_id}")
+    def delete_recurrence(series_id: str) -> dict[str, Any]:
+        def apply_delete(_today: str) -> dict[str, Any]:
+            cmds.delete_recurrence(ctx.clock, ctx.uow, series_id)
+            return {"ok": True}
+
+        return _locked(
+            ctx,
+            apply_delete,
+        )
+
+    @app.get("/api/planning/today")
+    def get_planning_today() -> dict[str, Any]:
+        return _locked(
+            ctx,
+            lambda today: planning_payload(
+                cmds.open_planning_today(ctx.clock, ctx.uow), today
+            ),
+        )
+
+    @app.post("/api/planning/today/complete")
+    def complete_planning_today() -> dict[str, Any]:
+        return _locked(
+            ctx,
+            lambda today: planning_payload(
+                cmds.complete_planning_today(ctx.clock, ctx.uow), today
+            ),
+        )
+
+    @app.get("/api/launchers")
+    def get_launchers() -> dict[str, Any]:
+        items = load_launchers(ctx.data_dir)
+        return {
+            "items": [
+                {"id": item.id, "name": item.name, "command": item.command}
+                for item in items
+            ]
+        }
+
+    @app.post("/api/launchers")
+    def create_launcher(body: LauncherBody) -> dict[str, Any]:
+        try:
+            item = add_launcher(body.name, body.command, ctx.data_dir)
+        except ValueError as exc:
+            raise ValidationError(str(exc)) from None
+        return {"id": item.id, "name": item.name, "command": item.command}
+
+    @app.patch("/api/launchers/{launcher_id}")
+    def patch_launcher(launcher_id: str, body: LauncherBody) -> dict[str, Any]:
+        try:
+            item = update_launcher(
+                launcher_id, body.name, body.command, ctx.data_dir
+            )
+        except KeyError:
+            raise NotFound("找不到该启动器") from None
+        except ValueError as exc:
+            raise ValidationError(str(exc)) from None
+        return {"id": item.id, "name": item.name, "command": item.command}
+
+    @app.delete("/api/launchers/{launcher_id}")
+    def remove_launcher(launcher_id: str) -> dict[str, Any]:
+        try:
+            delete_launcher(launcher_id, ctx.data_dir)
+        except KeyError:
+            raise NotFound("找不到该启动器") from None
+        return {"ok": True}
+
+    @app.post("/api/launchers/{launcher_id}/run")
+    def run_agent(launcher_id: str, body: PromptBody) -> dict[str, Any]:
+        items = load_launchers(ctx.data_dir)
+        found = next((item for item in items if item.id == launcher_id), None)
+        if found is None:
+            raise NotFound("找不到该启动器")
+        before = _locked(
+            ctx,
+            lambda today: context_payload(ctx.clock, ctx.uow, today),
+        )
+        result = run_launcher(
+            found,
+            body.prompt,
+            timeout=600,
+            clock=ctx.clock,
+            data_root=ctx.data_dir,
+            surface=body.surface,
+            date=body.date,
+        )
+        after = _locked(
+            ctx,
+            lambda today: context_payload(ctx.clock, ctx.uow, today),
+        )
+        receipt = build_agent_receipt(before, after)
+        status = (
+            "succeeded"
+            if result.ok
+            else ("failed_with_changes" if receipt["changed"] else "failed")
+        )
+        return {
+            "ok": result.ok,
+            "status": status,
+            "receipt": receipt,
+            "argv": result.argv,
+            "returncode": result.returncode,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+        }
 
     if dist_dir is not None:
         mount_spa(app, dist_dir)

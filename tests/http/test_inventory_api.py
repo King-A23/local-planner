@@ -90,7 +90,7 @@ def test_delete_task_without_history(client: TestClient) -> None:
     assert client.get("/api/inventory").json()["items"] == []
 
 
-def test_delete_task_with_sealed_history_conflicts(
+def test_delete_task_from_todo_keeps_sealed_snapshot(
     tmp_path: Path, clock: FrozenClock
 ) -> None:
     uow = SqliteUnitOfWork.open(tmp_path / "planner.sqlite")
@@ -106,10 +106,14 @@ def test_delete_task_with_sealed_history_conflicts(
             ),
             base_url="http://127.0.0.1:8787",
         ) as client:
+            listed = client.get("/api/inventory").json()["items"]
+            assert [row["taskId"] for row in listed] == [tid]
             response = client.delete(f"/api/tasks/{tid}")
-            assert response.status_code == 409
-            assert response.json()["error"] == "Conflict"
-            assert "过去的某一天" in response.json()["message"]
+            assert response.status_code == 200
+            assert client.get("/api/inventory").json()["items"] == []
+            past = client.get(f"/api/days/{TODAY}").json()
+            assert past["todos"][0]["taskId"] == tid
+            assert past["todos"][0]["title"] == "有历史"
     finally:
         uow.close()
 
@@ -121,3 +125,25 @@ def test_unknown_task_is_not_found(client: TestClient) -> None:
     )
     assert response.status_code == 404
     assert response.json()["error"] == "NotFound"
+
+
+def test_complete_inventory_task_preserves_today_history(client: TestClient) -> None:
+    task = client.post('/api/inventory/tasks', json={'title': '直接完成'}).json()
+    tid = task['taskId']
+    done = client.post(f'/api/inventory/tasks/{tid}/complete')
+    assert done.status_code == 200
+    row = next(row for row in done.json()['todos'] if row['taskId'] == tid)
+    assert row['completedOnDay'] is True
+    assert row['startClock'] is None and row['endClock'] is None
+    assert client.get('/api/inventory').json()['items'] == []
+    assert client.post(f'/api/inventory/tasks/{tid}/complete').status_code == 409
+    assert client.post(f'/api/days/{TODAY}/todos/{tid}/uncomplete').status_code == 200
+
+
+def test_complete_inventory_rejects_stale_scheduled_task(client: TestClient) -> None:
+    task = client.post('/api/inventory/tasks', json={'title': '已排期'}).json()
+    tid = task['taskId']
+    client.post(f'/api/tasks/{tid}/schedule', json={'date': FUTURE})
+    assert client.post(f'/api/inventory/tasks/{tid}/complete').status_code == 409
+    assert client.get(f'/api/days/{TODAY}').json()['todos'] == []
+    assert client.get(f'/api/days/{FUTURE}').json()['todos'][0]['taskId'] == tid

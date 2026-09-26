@@ -17,6 +17,9 @@ ErrandId = str
 TaskStatus = Literal["inventory", "scheduled", "completed"]
 ErrandStatus = Literal["open", "completed", "expired"]
 DayStatus = Literal["open", "sealed"]
+RecurrenceKind = Literal["plan", "errand"]
+RecurrenceFrequency = Literal["daily", "weekly"]
+RecurrenceState = Literal["active", "paused", "stopped"]
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 TITLE_MAX = 200
@@ -63,6 +66,10 @@ class Task:
     current_scheduled_date: Optional[CalendarDate]
     completed_at: Optional[UtcInstant]
     completed_on_date: Optional[CalendarDate]
+    target_date: Optional[CalendarDate] = None
+    discarded_at: Optional[UtcInstant] = None
+    series_id: Optional[str] = None
+    occurrence_date: Optional[CalendarDate] = None
 
 
 @dataclass(frozen=True)
@@ -74,6 +81,10 @@ class DayTaskEntry:
     title_snapshot: str
     sort_order: int
     completed_on_day: bool
+    start_clock: Optional[str] = None
+    end_clock: Optional[str] = None
+    series_id: Optional[str] = None
+    occurrence_date: Optional[CalendarDate] = None
 
 
 @dataclass(frozen=True)
@@ -84,6 +95,10 @@ class Errand:
     sort_order: int
     status: ErrandStatus
     completed_at: Optional[UtcInstant]
+    start_clock: Optional[str] = None
+    end_clock: Optional[str] = None
+    series_id: Optional[str] = None
+    occurrence_date: Optional[CalendarDate] = None
 
 
 @dataclass(frozen=True)
@@ -105,6 +120,55 @@ class DayPlan:
 @dataclass(frozen=True)
 class InventoryItem:
     task: Task
+
+
+@dataclass(frozen=True)
+class RecurrenceSeries:
+    id: str
+    kind: RecurrenceKind
+    title: str
+    frequency: RecurrenceFrequency
+    weekdays_mask: int
+    start_date: CalendarDate
+    schedule_from: CalendarDate
+    default_start_clock: Optional[str]
+    default_end_clock: Optional[str]
+    state: RecurrenceState
+    created_at: UtcInstant
+    updated_at: UtcInstant
+    paused_at: Optional[UtcInstant]
+    stopped_at: Optional[UtcInstant]
+    deleted_at: Optional[UtcInstant]
+
+
+@dataclass(frozen=True)
+class RecurrenceOccurrence:
+    series_id: str
+    occurrence_date: CalendarDate
+    kind: RecurrenceKind
+    entity_id: Optional[str]
+    disposition: Literal["materialized", "skipped_sealed"]
+    generated_at: UtcInstant
+
+
+@dataclass(frozen=True)
+class UpcomingDay:
+    date: CalendarDate
+    todo_count: int
+    errand_count: int
+    recurrence_count: int
+
+
+@dataclass(frozen=True)
+class PlanningView:
+    date: CalendarDate
+    status: Literal["unplanned", "ready"]
+    planned_at: Optional[UtcInstant]
+    day: DayPlan
+    returned_from_yesterday: list[InventoryItem]
+    due: list[InventoryItem]
+    inventory: list[InventoryItem]
+    upcoming: list[UpcomingDay]
 
 
 def task_status(t: Task) -> TaskStatus:

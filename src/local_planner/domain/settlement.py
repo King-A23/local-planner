@@ -6,6 +6,7 @@ from datetime import date, timedelta
 
 from local_planner.clock import Clock
 from local_planner.domain.models import CalendarDate
+from local_planner.domain.recurrence import materialize_occurrences_for_date
 from local_planner.domain.seal import settle_one_day
 from local_planner.domain.store import UnitOfWork
 
@@ -38,16 +39,21 @@ def ensure_settled(clock: Clock, uow: UnitOfWork) -> None:
         if uow.is_proven_empty():
             # 无 days / day_task_entries / errands 行：真正的空库
             uow.meta.set("last_settled_date", today)
-            return
+            last = today
         # 备份恢复、meta 丢失、测试先插日后写 meta：不得把水位直接跳到 today
-        earliest = earliest_relevant_date(uow)
-        if earliest is None or earliest >= today:
-            uow.meta.set("last_settled_date", today)
-            return
-        last = earliest
-    if last >= today:
+        if last is None:
+            earliest = earliest_relevant_date(uow)
+            if earliest is None or earliest >= today:
+                uow.meta.set("last_settled_date", today)
+                last = today
+            else:
+                last = earliest
+    if last > today:
         return
     # [last, today)：last=8-30 且 today=8-31 → 封印 8-30
-    for d in inclusive_range(last, day_before(today)):
-        settle_one_day(d, clock.now_utc(), uow)
-    uow.meta.set("last_settled_date", today)
+    if last < today:
+        for d in inclusive_range(last, day_before(today)):
+            materialize_occurrences_for_date(clock, uow, d)
+            settle_one_day(d, clock.now_utc(), uow)
+        uow.meta.set("last_settled_date", today)
+    materialize_occurrences_for_date(clock, uow, today)

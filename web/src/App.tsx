@@ -1,27 +1,47 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
+import { AgentPanel } from "./AgentPanel";
 import { errorMessage, getMeta, type Meta } from "./api";
+import { BackgroundDecorations } from "./BackgroundDecorations";
 import { META_POLL_MS } from "./constants";
+import { DailyPlanningPage } from "./DailyPlanningPage";
 import { DayView } from "./DayView";
 import { InventoryPage } from "./InventoryPage";
-import { handleNavClick, parseRoute } from "./route";
+import { RecurrencesPage } from "./RecurrencesPage";
+import { handleNavClick, navigate, parseRoute } from "./route";
 import { Shell } from "./Shell";
 
-function usePathname(): string {
-  const [pathname, setPathname] = useState(() => window.location.pathname);
+function useLocation(): { pathname: string; search: string } {
+  const [location, setLocation] = useState(() => ({
+    pathname: window.location.pathname,
+    search: window.location.search,
+  }));
   useEffect(() => {
-    const onPop = () => setPathname(window.location.pathname);
+    const onPop = () =>
+      setLocation({ pathname: window.location.pathname, search: window.location.search });
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
-  return pathname;
+  return location;
 }
 
 export function App() {
-  const pathname = usePathname();
+  const { pathname, search } = useLocation();
   const route = parseRoute(pathname);
   const [meta, setMeta] = useState<Meta | null>(null);
   const [metaError, setMetaError] = useState<string | null>(null);
+  const [planningDismissed, setPlanningDismissed] = useState(false);
+  const [agentOpen, setAgentOpen] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return new URLSearchParams(window.location.search).get("agent") === "1";
+  });
+  const [agentRunTick, setAgentRunTick] = useState(0);
+  const agentTriggerRef = useRef<HTMLElement | null>(null);
+
+  const openAgent = useCallback((trigger: HTMLButtonElement) => {
+    agentTriggerRef.current = trigger;
+    setAgentOpen(true);
+  }, []);
 
   const refreshMeta = useCallback(() => {
     getMeta()
@@ -42,12 +62,46 @@ export function App() {
     };
   }, [refreshMeta]);
 
+  useEffect(() => {
+    setPlanningDismissed(false);
+  }, [meta?.today]);
+
+  const displayingToday =
+    route.kind === "today" ||
+    (route.kind === "day" && route.date === meta?.today);
+
+  useEffect(() => {
+    if (
+      meta?.planningStatus === "unplanned" &&
+      displayingToday &&
+      !planningDismissed
+    ) {
+      navigate("/planning/today");
+    }
+  }, [displayingToday, meta?.planningStatus, planningDismissed]);
+
   const viewedDate =
     route.kind === "day"
       ? route.date
       : route.kind === "today"
         ? meta?.today
-        : undefined;
+      : undefined;
+
+  const agentSurface =
+    route.kind === "inventory"
+      ? "todo"
+      : route.kind === "day"
+        ? "day"
+        : "today";
+  const agentDate = route.kind === "day" ? route.date : null;
+  const activeSection =
+    route.kind === "inventory"
+      ? "inventory"
+      : route.kind === "recurrences"
+        ? "recurrences"
+        : route.kind === "notfound"
+          ? undefined
+          : "today";
 
   let body;
   if (route.kind === "inventory") {
@@ -61,10 +115,52 @@ export function App() {
       body = (
         <>
           {metaError ? <p className="error">{metaError}</p> : null}
-          <InventoryPage today={meta.today} onInventoryChange={refreshMeta} />
+          <InventoryPage
+            today={meta.today}
+            onInventoryChange={refreshMeta}
+            refreshToken={agentRunTick}
+          />
         </>
       );
     }
+  } else if (route.kind === "recurrences") {
+    if (!meta) {
+      body = (
+        <main className="page">
+          {metaError ? <p className="error">{metaError}</p> : <p>加载中…</p>}
+        </main>
+      );
+    } else {
+      const kind = new URLSearchParams(search).get("kind");
+      body = (
+        <>
+          {metaError ? <p className="error">{metaError}</p> : null}
+          <RecurrencesPage
+            today={meta.today}
+            initialKind={kind === "errand" || kind === "plan" ? kind : undefined}
+            onChange={refreshMeta}
+            refreshToken={agentRunTick}
+          />
+        </>
+      );
+    }
+  } else if (route.kind === "todayPlanning") {
+    body = (
+      <DailyPlanningPage
+        onChange={refreshMeta}
+        onReady={() => {
+          setPlanningDismissed(true);
+          refreshMeta();
+        }}
+        onDefer={() => {
+          setPlanningDismissed(true);
+          navigate("/");
+        }}
+        agentOpen={agentOpen}
+        onOpenAgent={openAgent}
+        refreshToken={agentRunTick}
+      />
+    );
   } else if (route.kind === "notfound") {
     body = (
       <main className="page">
@@ -91,6 +187,12 @@ export function App() {
             date={meta.today}
             serverToday={meta.today}
             onInventoryChange={refreshMeta}
+            planningStatus={meta.planningStatus}
+            onStartPlanning={() => {
+              setPlanningDismissed(false);
+              navigate("/planning/today");
+            }}
+            refreshToken={agentRunTick}
           />
         </>
       );
@@ -101,17 +203,43 @@ export function App() {
         date={route.date}
         serverToday={meta?.today}
         onInventoryChange={refreshMeta}
+        planningStatus={
+          route.date === meta?.today ? meta?.planningStatus : undefined
+        }
+        onStartPlanning={() => {
+          setPlanningDismissed(false);
+          navigate("/planning/today");
+        }}
+        refreshToken={agentRunTick}
       />
     );
   }
 
   return (
-    <Shell
-      inventoryCount={meta?.inventoryCount}
-      today={meta?.today}
-      viewedDate={viewedDate}
-    >
-      {body}
-    </Shell>
+    <div className="layout" data-agent-open={agentOpen ? "true" : undefined}>
+      <BackgroundDecorations />
+      <Shell
+        inventoryCount={meta?.inventoryCount}
+        today={meta?.today}
+        viewedDate={viewedDate}
+        activeSection={activeSection}
+        agentOpen={agentOpen}
+        onOpenAgent={openAgent}
+      >
+        {body}
+      </Shell>
+      <AgentPanel
+        open={agentOpen}
+        onClose={() => setAgentOpen(false)}
+        onOpen={() => setAgentOpen(true)}
+        triggerRef={agentTriggerRef}
+        surface={agentSurface}
+        date={agentDate}
+        onRan={() => {
+          setAgentRunTick((tick) => tick + 1);
+          refreshMeta();
+        }}
+      />
+    </div>
   );
 }

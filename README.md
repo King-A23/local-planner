@@ -13,8 +13,12 @@ python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 cd web && npm ci && npm run build && cd ..
-python -m local_planner serve
+local-todo
 ```
+
+日常使用直接运行 `local-todo`：如果服务尚未启动，它会在后台启动服务，等待就绪后打开网页；如果已经启动，则直接打开，不会重复启动。`local-todo open` 与无参数形式等价。后台日志写入数据目录的 `server.log`。
+
+需要让服务留在当前终端查看实时日志时，使用 `local-todo serve`；原有的 `python -m local_planner serve` 与 `local-planner` 命令继续兼容。
 
 浏览器**只**打开启动日志里的地址：
 
@@ -26,7 +30,7 @@ http://127.0.0.1:8787
 
 生产 `serve` 同时提供 JSON API 与 `web/dist` SPA。缺 `web/dist/index.html` 时拒绝启动，并提示 `run npm run build`。
 
-换端口：`LOCAL_PLANNER_PORT` 或 `python -m local_planner serve --port 9000`。
+换端口：`local-todo --port 9000`、`LOCAL_PLANNER_PORT`，或 `python -m local_planner serve --port 9000`。
 
 默认数据文件：`~/Library/Application Support/local-planner/planner.sqlite`。覆盖目录：`LOCAL_PLANNER_DATA_DIR`（文件名仍是 `planner.sqlite`）。
 

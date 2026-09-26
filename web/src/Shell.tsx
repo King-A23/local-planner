@@ -3,12 +3,16 @@ import { useState, type ReactNode } from "react";
 import { MonthCalendar } from "./Calendar";
 import { DISPLAY_NAME } from "./constants";
 import { handleNavClick } from "./route";
+import { ThemeSwitcher } from "./ThemeSwitcher";
 
 type ShellProps = {
   children: ReactNode;
   inventoryCount?: number;
   today?: string;
   viewedDate?: string;
+  activeSection?: "today" | "inventory" | "recurrences";
+  agentOpen: boolean;
+  onOpenAgent: (trigger: HTMLButtonElement) => void;
 };
 
 export function Shell({
@@ -16,6 +20,9 @@ export function Shell({
   inventoryCount,
   today,
   viewedDate,
+  activeSection,
+  agentOpen,
+  onOpenAgent,
 }: ShellProps) {
   const [calOpen, setCalOpen] = useState(false);
 
@@ -26,15 +33,41 @@ export function Shell({
           {DISPLAY_NAME}
         </a>
         <nav className="nav">
-          <a href="/" onClick={(e) => handleNavClick(e, "/")}>
+          <a
+            href="/"
+            aria-current={activeSection === "today" ? "page" : undefined}
+            onClick={(e) => handleNavClick(e, "/")}
+          >
             Today
           </a>
-          <a href="/inventory" onClick={(e) => handleNavClick(e, "/inventory")}>
+          <a
+            href="/inventory"
+            aria-current={activeSection === "inventory" ? "page" : undefined}
+            onClick={(e) => handleNavClick(e, "/inventory")}
+          >
             To Do
             {inventoryCount ? (
               <span className="badge count">{inventoryCount}</span>
             ) : null}
           </a>
+          <a
+            href="/recurrences"
+            aria-current={activeSection === "recurrences" ? "page" : undefined}
+            onClick={(e) => handleNavClick(e, "/recurrences")}
+          >
+            定期事项
+          </a>
+          <button
+            type="button"
+            className={`nav-agent ${agentOpen ? "active" : ""}`}
+            aria-expanded={agentOpen}
+            aria-controls="agent-panel"
+            onClick={(event) => onOpenAgent(event.currentTarget)}
+          >
+            <span className="agent-nav-sparkle">✨</span>
+            <span className="agent-label-long">计划助手</span>
+            <span className="agent-label-short">助手</span>
+          </button>
           <button
             type="button"
             className="nav-cal"
@@ -45,6 +78,7 @@ export function Shell({
           >
             Calendar
           </button>
+          <ThemeSwitcher />
           {calOpen && today ? (
             <MonthCalendar
               today={today}

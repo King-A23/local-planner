@@ -201,7 +201,7 @@ def test_same_task_cannot_be_scheduled_on_two_open_days(planner: Planner) -> Non
 
 
 def test_delete_without_history_ok_sealed_history_conflict(planner: Planner) -> None:
-    """21. 删除：无历史可删；有封印历史 409。"""
+    """无历史可删。还排在某天且有封印历史则不能删；已回 To Do 的可以删。"""
     item = planner.add_to_inventory("误建")
     planner.delete_task(item.task.id)
     assert item.task.id not in _inv_ids(planner)
@@ -209,8 +209,9 @@ def test_delete_without_history_ok_sealed_history_conflict(planner: Planner) -> 
     plan = planner.add_todo_on_day(FUTURE, "有封印历史")
     tid = _tid(plan)
     planner.seal_day(FUTURE)
-    with pytest.raises(Conflict, match="过去的某一天还记着它"):
-        planner.delete_task(tid)
+    assert tid in _inv_ids(planner)
+    planner.delete_task(tid)
+    assert tid not in _inv_ids(planner)
     assert planner.open_day(FUTURE).todos[0].task_id == tid
 
 

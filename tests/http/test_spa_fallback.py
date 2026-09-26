@@ -138,7 +138,7 @@ def test_day_view_has_errand_column_not_on_inventory() -> None:
     assert "ListInventory" not in day_view
     assert "零碎差事" not in app
     assert "<h2>Errands</h2>" not in app
-    assert "errand" not in app.lower()
+    assert "<h2>Errands</h2>" not in app
     assert "InventoryPage" in app
     assert "未排期的正经待办将出现在这里" not in app
 
@@ -168,10 +168,12 @@ def test_date_nav_calendar_readonly_and_midnight_poll() -> None:
     assert "addCivilDays(plan.date, 1)" in day_view
     assert 'aria-label="上一天"' in day_view
     assert 'aria-label="下一天"' in day_view
+    assert 'className="day-columns"' in day_view
+    assert 'className="column-empty"' in day_view
     assert "DaySealed" in day_view
     assert "这一天已封印，不能改" in day_view
     assert "page readonly" in day_view
-    assert "[date, serverToday]" in day_view
+    assert "[date, serverToday, refreshToken]" in day_view
     assert "/api/calendar" not in day_view
     assert "ListInventory" not in day_view
 
@@ -179,7 +181,7 @@ def test_date_nav_calendar_readonly_and_midnight_poll() -> None:
     assert "setInterval" in app
     assert "META_POLL_MS" in app
     assert "getMeta" in app
-    assert "navigate(" not in app
+    assert 'navigate("/planning/today")' in app
     assert "history.pushState" not in app
     assert "history.replaceState" not in app
     assert "serverToday={meta?.today}" in app
@@ -191,6 +193,9 @@ def test_date_nav_calendar_readonly_and_midnight_poll() -> None:
     assert "§" not in dates
 
     assert "MonthCalendar" in shell
+    assert 'aria-current={activeSection === "today" ? "page" : undefined}' in shell
+    assert 'aria-current={activeSection === "inventory" ? "page" : undefined}' in shell
+    assert 'aria-current={activeSection === "recurrences" ? "page" : undefined}' in shell
     assert 'handleNavClick(e, "/")' in shell
     assert "todoCount + day.errandCount > 0" in calendar
     assert "navigate(`/d/${date}`)" in calendar
@@ -222,11 +227,11 @@ def test_inventory_schedule_and_inline_add_ui() -> None:
     assert "To Do →" in day_view
     assert 'handleNavClick(event, "/inventory")' in day_view
     assert "Move to To Do" in day_view
-    assert "Reschedule" in day_view
+    assert "Reschedule" not in day_view
     assert "INVENTORY_INLINE_LIMIT" in day_view
     assert "items.slice(0, INVENTORY_INLINE_LIMIT)" in day_view
     assert "plan.writable" in day_view
-    assert "[date, plan?.writable, serverToday]" in day_view
+    assert "[date, plan?.writable, serverToday, refreshToken]" in day_view
     assert "scheduleTask(item.taskId, plan.date)" in day_view
     assert 'role="dialog"' not in day_view
     assert "modal" not in day_view.lower()
@@ -236,6 +241,16 @@ def test_inventory_schedule_and_inline_add_ui() -> None:
     assert 'label="Later"' in inventory
     assert "addToInventory" in inventory
     assert "scheduleTask" in inventory
+    assert "inventory-composer-title" in inventory
+    assert "在这里添加新的待办事项" in inventory
+    assert 'placeholder="输入待办事项，按回车添加"' in inventory
+    assert "formatChineseDate(draftDate)" in inventory
+    assert 'return "选择日期"' in inventory
+    assert "年${Number(month)}月${Number(day)}日" in inventory
+    assert 'lang="zh-CN"' in inventory
+    assert "inventory-add-form" in inventory
+    assert "inventory-add-button" in inventory
+    assert "disabled={!draft.trim()}" in inventory
     assert 'role="dialog"' not in inventory
     assert "零碎差事" not in inventory
     assert "<h2>Errands</h2>" not in inventory
@@ -257,14 +272,70 @@ def test_reorder_ui_uses_existing_order_apis() -> None:
     assert "reorderErrands" in api
     assert "/api/days/${date}/todos/order" in api
     assert "/api/days/${date}/errands/order" in api
-    assert "reorderTodos(plan.date, ids)" in day_view
-    assert "reorderErrands(plan.date, ids)" in day_view
-    assert 'aria-label="Move up"' in day_view
-    assert 'aria-label="Move down"' in day_view
-    assert "onMoveTodo" in day_view
-    assert "onMoveErrand" in day_view
+    assert "reorderTodos" not in day_view
+    assert "reorderErrands" not in day_view
+    assert 'aria-label="Move up"' not in day_view
+    assert 'aria-label="Move down"' not in day_view
+    assert "onMoveTodo" not in day_view
+    assert "onMoveErrand" not in day_view
     assert "reorderTodos" not in inventory
     assert "reorderErrands" not in inventory
+
+
+def test_v2_clocks_and_agent_panel_ui() -> None:
+    web = Path(__file__).resolve().parents[2] / "web"
+    src = web / "src"
+    day_view = (src / "DayView.tsx").read_text(encoding="utf-8")
+    inventory = (src / "InventoryPage.tsx").read_text(encoding="utf-8")
+    app = (src / "App.tsx").read_text(encoding="utf-8")
+    clock = (src / "ClockField.tsx").read_text(encoding="utf-8")
+    agent = (src / "AgentPanel.tsx").read_text(encoding="utf-8")
+    api = (src / "api.ts").read_text(encoding="utf-8")
+
+    assert "ClockField" in day_view
+    assert 'label="Start"' in day_view
+    assert 'label="End"' in day_view
+    assert 'type="range"' not in clock
+    assert "SLOT_COUNT" not in clock
+    assert "new Date(" not in clock
+    assert "Overdue" in inventory
+    assert '"Due"' in inventory or ">Due<" in inventory
+    assert 'aria-label="Target date"' in inventory
+    assert "setTaskTarget" in inventory
+    planning = (src / "DailyPlanningPage.tsx").read_text(encoding="utf-8")
+    assert "AgentPanel" in app
+    assert "AgentPanel" not in planning
+    assert "planTick" not in app
+    assert "onOpenAgent" in planning
+    assert 'className="layout"' in app
+    shell = (src / "Shell.tsx").read_text(encoding="utf-8")
+    styles = (src / "styles.css").read_text(encoding="utf-8")
+    assert "agent-drawer" in agent
+    assert 'role="dialog"' in agent
+    assert 'aria-modal="true"' in agent
+    assert "aria-expanded={agentOpen}" in planning
+    assert "nav-agent" in shell
+    assert "onOpenAgent" in shell
+    assert "agent-backdrop" in agent
+    assert 'event.key === "Escape"' in agent
+    assert 'event.key !== "Tab"' in agent
+    assert "tabIndex={-1}" in agent
+    assert "@media (max-width: 30rem)" in styles
+    assert 'aria-label="Agent group"' in agent
+    assert "opencode run {prompt}" not in agent
+    assert "agent-output" in agent
+    assert "body.stdout" in agent
+    assert "删除" in agent
+    assert "/api/launchers" in agent
+    assert "/api/launchers/${selected}/run" in agent
+    assert "重新执行" not in agent
+    assert "setPrompt(\"\")" not in agent
+    assert "resubmit" not in agent
+    assert "surface," in agent
+    assert "date," in agent
+    assert "setTodoClocks" in api
+    assert "setErrandClocks" in api
+    assert "/api/tasks/${taskId}/target" in api
 
 
 def _write_index(path: Path, body: str = "ok") -> Path:

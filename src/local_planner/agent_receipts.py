@@ -1,0 +1,578 @@
+"""Semantic receipts derived from normalized planner context snapshots.
+
+The launcher is an external process and may execute more than one CLI command.  Its
+stdout is therefore not a reliable audit trail.  This module compares the stable
+entity ids in two ``context_payload`` values and reports only planner semantics.
+"""
+
+from __future__ import annotations
+
+from collections import Counter
+from dataclasses import dataclass
+from typing import Any, Literal, Mapping
+
+Context = Mapping[str, Any]
+Location = Literal["plan", "todo", "scheduled"]
+
+
+@dataclass(frozen=True)
+class _TaskState:
+    task_id: str
+    title: str
+    location: Location
+    date: str | None
+    completed: bool | None = None
+    start_clock: str | None = None
+    end_clock: str | None = None
+    target_date: str | None = None
+
+
+@dataclass(frozen=True)
+class _ErrandState:
+    errand_id: str
+    title: str
+    status: str
+    date: str | None
+    start_clock: str | None = None
+    end_clock: str | None = None
+
+
+@dataclass(frozen=True)
+class _RecurrenceState:
+    series_id: str
+    title: str
+    state: str
+    kind: str
+    frequency: str
+    weekdays: tuple[str, ...]
+    start_date: str | None
+    start_clock: str | None
+    end_clock: str | None
+
+
+_TYPE_ORDER = {
+    "recurrence_created": -5,
+    "recurrence_updated": -4,
+    "recurrence_paused": -3,
+    "recurrence_resumed": -2,
+    "recurrence_stopped": -1,
+    "recurrence_deleted": 0,
+    "plan_added": 1,
+    "errand_added": 2,
+    "todo_added": 3,
+    "todo_to_today": 4,
+    "todo_scheduled": 5,
+    "moved_to_todo": 6,
+    "rescheduled": 7,
+    "completed": 8,
+    "completion_undone": 9,
+    "renamed": 10,
+    "clock_changed": 11,
+    "target_date_changed": 12,
+    "deleted": 13,
+}
+
+_SUMMARY_LABELS = {
+    "recurrence_created": "新增定期事项",
+    "recurrence_updated": "更新定期事项",
+    "recurrence_paused": "暂停定期事项",
+    "recurrence_resumed": "恢复定期事项",
+    "recurrence_stopped": "停止定期事项",
+    "recurrence_deleted": "删除定期事项",
+    "plan_added": "新增 Plan",
+    "errand_added": "新增 Errand",
+    "todo_added": "新增 To Do",
+    "todo_to_today": "To Do 加入今天",
+    "todo_scheduled": "To Do 排入计划",
+    "moved_to_todo": "移回 To Do",
+    "rescheduled": "改排",
+    "completed": "完成",
+    "completion_undone": "取消完成",
+    "renamed": "改名",
+    "clock_changed": "改时钟",
+    "target_date_changed": "改目标日",
+    "deleted": "删除",
+}
+
+
+def build_agent_receipt(before: Context, after: Context) -> dict[str, Any]:
+    """Return a stable JSON-compatible semantic diff of two context payloads.
+
+    Unknown context keys are ignored.  Change order is deterministic by semantic
+    type and entity id, so the payload is suitable for API responses and tests.
+    """
+
+    before_today = _optional_text(before.get("today"))
+    after_today = _optional_text(after.get("today"))
+    before_tasks = _task_states(before)
+    after_tasks = _task_states(after)
+    before_errands = _errand_states(before)
+    after_errands = _errand_states(after)
+    before_recurrences = _recurrence_states(before)
+    after_recurrences = _recurrence_states(after)
+
+    changes: list[dict[str, Any]] = []
+    for task_id in sorted(set(before_tasks) | set(after_tasks)):
+        old = before_tasks.get(task_id)
+        new = after_tasks.get(task_id)
+        changes.extend(_diff_task(old, new, before_today, after_today))
+
+    for errand_id in sorted(set(before_errands) | set(after_errands)):
+        old = before_errands.get(errand_id)
+        new = after_errands.get(errand_id)
+        changes.extend(_diff_errand(old, new))
+
+    for series_id in sorted(set(before_recurrences) | set(after_recurrences)):
+        changes.extend(
+            _diff_recurrence(
+                before_recurrences.get(series_id),
+                after_recurrences.get(series_id),
+            )
+        )
+
+    changes.sort(
+        key=lambda change: (
+            _TYPE_ORDER[change["type"]],
+            change["entity"],
+            change["id"],
+        )
+    )
+    counts = Counter(change["type"] for change in changes)
+    stable_counts = {
+        change_type: counts[change_type]
+        for change_type in _TYPE_ORDER
+        if counts[change_type]
+    }
+    return {
+        "summary": _summarize(counts),
+        "changed": bool(changes),
+        "counts": stable_counts,
+        "changes": changes,
+    }
+
+
+def _task_states(context: Context) -> dict[str, _TaskState]:
+    today = _optional_text(context.get("today"))
+    states: dict[str, _TaskState] = {}
+    for row in _rows(context, "todos"):
+        task_id = _required_id(row, "taskId")
+        states[task_id] = _TaskState(
+            task_id=task_id,
+            title=_text(row.get("title")),
+            location="plan",
+            date=today,
+            completed=bool(row.get("completedOnDay", False)),
+            start_clock=_optional_text(row.get("startClock")),
+            end_clock=_optional_text(row.get("endClock")),
+        )
+    for row in _rows(context, "inventory"):
+        task_id = _required_id(row, "taskId")
+        states[task_id] = _TaskState(
+            task_id=task_id,
+            title=_text(row.get("title")),
+            location="todo",
+            date=None,
+            target_date=_optional_text(row.get("targetDate")),
+        )
+    for row in _rows(context, "scheduledAhead"):
+        task_id = _required_id(row, "taskId")
+        states[task_id] = _TaskState(
+            task_id=task_id,
+            title=_text(row.get("title")),
+            location="scheduled",
+            date=_optional_text(row.get("date")),
+        )
+    return states
+
+
+def _errand_states(context: Context) -> dict[str, _ErrandState]:
+    today = _optional_text(context.get("today"))
+    states: dict[str, _ErrandState] = {}
+    for row in _rows(context, "errands"):
+        errand_id = _required_id(row, "id")
+        states[errand_id] = _ErrandState(
+            errand_id=errand_id,
+            title=_text(row.get("title")),
+            status=_text(row.get("status")) or "open",
+            date=today,
+            start_clock=_optional_text(row.get("startClock")),
+            end_clock=_optional_text(row.get("endClock")),
+        )
+    for row in _rows(context, "errandsAhead"):
+        errand_id = _required_id(row, "id")
+        states[errand_id] = _ErrandState(
+            errand_id=errand_id,
+            title=_text(row.get("title")),
+            status=_text(row.get("status")) or "open",
+            date=_optional_text(row.get("date")),
+            start_clock=_optional_text(row.get("startClock")),
+            end_clock=_optional_text(row.get("endClock")),
+        )
+    return states
+
+
+def _recurrence_states(context: Context) -> dict[str, _RecurrenceState]:
+    states: dict[str, _RecurrenceState] = {}
+    for row in _rows(context, "recurrences"):
+        series_id = _required_id(row, "id")
+        states[series_id] = _RecurrenceState(
+            series_id=series_id,
+            title=_text(row.get("title")),
+            state=_text(row.get("state")),
+            kind=_text(row.get("kind")),
+            frequency=_text(row.get("frequency")),
+            weekdays=tuple(str(value) for value in (row.get("weekdays") or [])),
+            start_date=_optional_text(row.get("startDate")),
+            start_clock=_optional_text(row.get("defaultStartClock")),
+            end_clock=_optional_text(row.get("defaultEndClock")),
+        )
+    return states
+
+
+def _diff_recurrence(
+    old: _RecurrenceState | None, new: _RecurrenceState | None
+) -> list[dict[str, Any]]:
+    if old is None and new is not None:
+        return [
+            _change(
+                "recurrence_created", "recurrence", new.series_id, new.title
+            )
+        ]
+    if old is not None and new is None:
+        return [
+            _change(
+                "recurrence_deleted", "recurrence", old.series_id, old.title
+            )
+        ]
+    if old is None or new is None:
+        return []
+    changes: list[dict[str, Any]] = []
+    old_rule = (
+        old.title,
+        old.kind,
+        old.frequency,
+        old.weekdays,
+        old.start_date,
+        old.start_clock,
+        old.end_clock,
+    )
+    new_rule = (
+        new.title,
+        new.kind,
+        new.frequency,
+        new.weekdays,
+        new.start_date,
+        new.start_clock,
+        new.end_clock,
+    )
+    if old_rule != new_rule:
+        changes.append(
+            _change(
+                "recurrence_updated", "recurrence", new.series_id, new.title
+            )
+        )
+    if old.state != new.state:
+        transition = {
+            "paused": "recurrence_paused",
+            "active": "recurrence_resumed",
+            "stopped": "recurrence_stopped",
+        }.get(new.state)
+        if transition:
+            changes.append(
+                _change(transition, "recurrence", new.series_id, new.title)
+            )
+    return changes
+
+
+def _diff_task(
+    old: _TaskState | None,
+    new: _TaskState | None,
+    before_today: str | None,
+    after_today: str | None,
+) -> list[dict[str, Any]]:
+    if old is None and new is not None:
+        if new.location == "todo":
+            return [_change("todo_added", "todo", new.task_id, new.title)]
+        return [
+            _change(
+                "plan_added",
+                "plan",
+                new.task_id,
+                new.title,
+                date=new.date,
+            )
+        ]
+    if old is not None and new is None:
+        return [
+            _change(
+                "deleted",
+                _task_entity(old),
+                old.task_id,
+                old.title,
+                date=old.date,
+            )
+        ]
+    if old is None or new is None:  # pragma: no cover - narrowed above
+        return []
+
+    changes: list[dict[str, Any]] = []
+    if old.location == "todo" and new.location == "plan" and new.date == after_today:
+        changes.append(
+            _change(
+                "todo_to_today",
+                "plan",
+                new.task_id,
+                new.title,
+                toDate=new.date,
+            )
+        )
+    elif old.location == "todo" and new.location == "scheduled":
+        changes.append(
+            _change(
+                "todo_scheduled",
+                "plan",
+                new.task_id,
+                new.title,
+                toDate=new.date,
+            )
+        )
+    elif old.location in ("plan", "scheduled") and new.location == "todo":
+        changes.append(
+            _change(
+                "moved_to_todo",
+                "todo",
+                new.task_id,
+                new.title,
+                fromDate=old.date,
+            )
+        )
+    elif _is_schedule_move(old, new, before_today, after_today):
+        changes.append(
+            _change(
+                "rescheduled",
+                "plan",
+                new.task_id,
+                new.title,
+                fromDate=old.date,
+                toDate=new.date,
+            )
+        )
+
+    if old.completed is not None and new.completed is not None:
+        if old.completed is False and new.completed is True:
+            changes.append(
+                _change("completed", "plan", new.task_id, new.title, date=new.date)
+            )
+        elif old.completed is True and new.completed is False:
+            changes.append(
+                _change(
+                    "completion_undone",
+                    "plan",
+                    new.task_id,
+                    new.title,
+                    date=new.date,
+                )
+            )
+
+    if old.title != new.title:
+        changes.append(
+            _change(
+                "renamed",
+                _task_entity(new),
+                new.task_id,
+                new.title,
+                before=old.title,
+                after=new.title,
+            )
+        )
+
+    # Clocks belong to a particular Plan appearance.  Comparing them across an
+    # unschedule/reschedule would turn an intentionally hidden value into a false
+    # clock edit, so only compare the same visible appearance.
+    if (
+        old.location == new.location == "plan"
+        and old.date == new.date
+        and (old.start_clock, old.end_clock) != (new.start_clock, new.end_clock)
+    ):
+        changes.append(
+            _change(
+                "clock_changed",
+                "plan",
+                new.task_id,
+                new.title,
+                before={
+                    "startClock": old.start_clock,
+                    "endClock": old.end_clock,
+                },
+                after={
+                    "startClock": new.start_clock,
+                    "endClock": new.end_clock,
+                },
+            )
+        )
+
+    # targetDate is currently present only on inventory rows.  Its absence while
+    # scheduled must not be interpreted as clearing the target date.
+    if (
+        old.location == new.location == "todo"
+        and old.target_date != new.target_date
+    ):
+        changes.append(
+            _change(
+                "target_date_changed",
+                "todo",
+                new.task_id,
+                new.title,
+                before=old.target_date,
+                after=new.target_date,
+            )
+        )
+    return changes
+
+
+def _diff_errand(
+    old: _ErrandState | None, new: _ErrandState | None
+) -> list[dict[str, Any]]:
+    if old is None and new is not None:
+        return [
+            _change(
+                "errand_added",
+                "errand",
+                new.errand_id,
+                new.title,
+                date=new.date,
+            )
+        ]
+    if old is not None and new is None:
+        return [
+            _change(
+                "deleted",
+                "errand",
+                old.errand_id,
+                old.title,
+                date=old.date,
+            )
+        ]
+    if old is None or new is None:  # pragma: no cover - narrowed above
+        return []
+
+    changes: list[dict[str, Any]] = []
+    if old.status != new.status:
+        if old.status == "open" and new.status == "completed":
+            changes.append(
+                _change(
+                    "completed",
+                    "errand",
+                    new.errand_id,
+                    new.title,
+                    date=new.date,
+                )
+            )
+        elif old.status == "completed" and new.status == "open":
+            changes.append(
+                _change(
+                    "completion_undone",
+                    "errand",
+                    new.errand_id,
+                    new.title,
+                    date=new.date,
+                )
+            )
+    if old.title != new.title:
+        changes.append(
+            _change(
+                "renamed",
+                "errand",
+                new.errand_id,
+                new.title,
+                before=old.title,
+                after=new.title,
+            )
+        )
+    if (old.start_clock, old.end_clock) != (new.start_clock, new.end_clock):
+        changes.append(
+            _change(
+                "clock_changed",
+                "errand",
+                new.errand_id,
+                new.title,
+                before={
+                    "startClock": old.start_clock,
+                    "endClock": old.end_clock,
+                },
+                after={
+                    "startClock": new.start_clock,
+                    "endClock": new.end_clock,
+                },
+            )
+        )
+    return changes
+
+
+def _is_schedule_move(
+    old: _TaskState,
+    new: _TaskState,
+    before_today: str | None,
+    after_today: str | None,
+) -> bool:
+    old_scheduled = old.location in ("plan", "scheduled")
+    new_scheduled = new.location in ("plan", "scheduled")
+    if not old_scheduled or not new_scheduled:
+        return False
+    if old.date != new.date:
+        return True
+    # A day boundary can change the context bucket without an actual reschedule.
+    return old.location != new.location and before_today == after_today
+
+
+def _task_entity(state: _TaskState) -> str:
+    return "todo" if state.location == "todo" else "plan"
+
+
+def _change(
+    change_type: str,
+    entity: str,
+    entity_id: str,
+    title: str,
+    **details: Any,
+) -> dict[str, Any]:
+    return {
+        "type": change_type,
+        "entity": entity,
+        "id": entity_id,
+        "title": title,
+        **details,
+    }
+
+
+def _summarize(counts: Counter[str]) -> str:
+    if not counts:
+        return "没有发现计划改动"
+    parts = [
+        f"{_SUMMARY_LABELS[change_type]} {counts[change_type]} 项"
+        for change_type in _TYPE_ORDER
+        if counts[change_type]
+    ]
+    return "；".join(parts)
+
+
+def _rows(context: Context, key: str) -> list[Mapping[str, Any]]:
+    value = context.get(key, [])
+    if not isinstance(value, list):
+        return []
+    return [row for row in value if isinstance(row, Mapping)]
+
+
+def _required_id(row: Mapping[str, Any], key: str) -> str:
+    value = row.get(key)
+    if value is None:
+        raise ValueError(f"context row missing {key}")
+    return str(value)
+
+
+def _text(value: Any) -> str:
+    return "" if value is None else str(value)
+
+
+def _optional_text(value: Any) -> str | None:
+    return None if value is None else str(value)

@@ -153,7 +153,7 @@ def test_health_skips_settle(tmp_path: Path) -> None:
         ) as client:
             health_response = client.get("/api/health")
             assert health_response.status_code == 200
-            assert health_response.json() == {"ok": True}
+            assert health_response.json() == {"ok": True, "service": "local-planner"}
             assert uow.get_day(YESTERDAY).status == "open"
             assert uow.get_errand(eid).status == "open"
             meta = client.get("/api/meta")

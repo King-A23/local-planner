@@ -14,48 +14,43 @@ import {
   openDay,
   renameErrand,
   renameTask,
-  reorderErrands,
-  reorderTodos,
   scheduleTask,
+  setErrandClocks,
+  setTodoClocks,
   uncompleteErrand,
   uncompleteTodo,
   unscheduleTask,
   type DayPlan,
   type Errand,
   type InventoryItem,
+  type PlanningStatus,
   type Todo,
 } from "./api";
+import { ClockField } from "./ClockField";
 import { INVENTORY_INLINE_LIMIT } from "./constants";
-import { DatePickButton } from "./DatePickButton";
-import { addCivilDays, formatDayHeading, maxWritableDate } from "./dates";
-import { handleNavClick } from "./route";
+import { addCivilDays, formatDayHeading } from "./dates";
+import { handleNavClick, navigate } from "./route";
 
 type DayViewProps = {
   date: string;
   serverToday?: string;
   onInventoryChange?: () => void;
+  refreshToken?: number;
+  planningStatus?: PlanningStatus;
+  onStartPlanning?: () => void;
 };
 
 function isVoidedErrand(errand: Errand, writable: boolean): boolean {
   return errand.status === "expired" || (!writable && errand.status !== "completed");
 }
 
-function swapAt<T>(items: T[], index: number, delta: -1 | 1): T[] | null {
-  const nextIndex = index + delta;
-  if (index < 0 || nextIndex < 0 || nextIndex >= items.length) {
-    return null;
-  }
-  const next = items.slice();
-  const tmp = next[index];
-  next[index] = next[nextIndex];
-  next[nextIndex] = tmp;
-  return next;
-}
-
 export function DayView({
   date,
   serverToday,
   onInventoryChange,
+  refreshToken,
+  planningStatus,
+  onStartPlanning,
 }: DayViewProps) {
   const [plan, setPlan] = useState<DayPlan | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -95,7 +90,7 @@ export function DayView({
     return () => {
       cancelled = true;
     };
-  }, [date, serverToday]);
+  }, [date, serverToday, refreshToken]);
 
   useEffect(() => {
     if (!plan?.writable) {
@@ -119,7 +114,7 @@ export function DayView({
     return () => {
       cancelled = true;
     };
-  }, [date, plan?.writable, serverToday]);
+  }, [date, plan?.writable, serverToday, refreshToken]);
 
   async function apply(
     work: () => Promise<DayPlan | void>,
@@ -255,19 +250,6 @@ export function DayView({
     })();
   }
 
-  function onReschedule(todo: Todo, nextDate: string): void {
-    if (!plan?.writable || todo.completedOnDay) {
-      return;
-    }
-    void apply(async () => {
-      const next = await scheduleTask(todo.taskId, nextDate);
-      if (next.date === plan.date) {
-        return next;
-      }
-      dropTodo(todo.taskId);
-    });
-  }
-
   function onScheduleHere(item: InventoryItem): void {
     if (!plan?.writable) {
       return;
@@ -332,36 +314,6 @@ export function DayView({
     void apply(() => deleteErrand(errand.id));
   }
 
-  function onMoveTodo(todo: Todo, delta: -1 | 1): void {
-    if (!plan?.writable) {
-      return;
-    }
-    const ids = swapAt(
-      plan.todos.map((item) => item.taskId),
-      plan.todos.findIndex((item) => item.taskId === todo.taskId),
-      delta,
-    );
-    if (!ids) {
-      return;
-    }
-    void apply(() => reorderTodos(plan.date, ids));
-  }
-
-  function onMoveErrand(errand: Errand, delta: -1 | 1): void {
-    if (!plan?.writable) {
-      return;
-    }
-    const ids = swapAt(
-      plan.errands.map((item) => item.id),
-      plan.errands.findIndex((item) => item.id === errand.id),
-      delta,
-    );
-    if (!ids) {
-      return;
-    }
-    void apply(() => reorderErrands(plan.date, ids));
-  }
-
   if (loading) {
     return (
       <main className="page">
@@ -411,106 +363,171 @@ export function DayView({
         <p className="sealed">这一天已封印，不能改</p>
       ) : null}
       {error ? <p className="error">{error}</p> : null}
-      <section className="column">
-        <h2>Plan</h2>
-        {plan.todos.length === 0 ? null : (
-          <ul className="todos">
-            {plan.todos.map((todo, index) => (
-              <TodoRow
-                key={todo.taskId}
-                todo={todo}
-                index={index}
-                count={plan.todos.length}
-                writable={plan.writable}
-                today={plan.serverToday}
-                onToggle={onToggle}
-                onRename={onRename}
-                onDelete={onDelete}
-                onUnschedule={onUnschedule}
-                onReschedule={onReschedule}
-                onMove={onMoveTodo}
+      {plan.isToday && planningStatus === "unplanned" ? (
+        <section className="planning-prompt" aria-labelledby="planning-prompt-title">
+          <div>
+            <h2 id="planning-prompt-title">今天尚未规划</h2>
+            <p>先挑几件今天真的要做的事；定期事项已保留在清单中。</p>
+          </div>
+          <button type="button" className="button-secondary" onClick={onStartPlanning}>
+            制定今天计划
+          </button>
+        </section>
+      ) : null}
+      {(() => {
+        const total = plan.todos.length + plan.errands.length;
+        if (total === 0) return null;
+        const done =
+          plan.todos.filter((t) => t.completedOnDay).length +
+          plan.errands.filter((e) => e.status === "completed").length;
+        const pct = Math.round((done / total) * 100);
+        return (
+          <div className="day-progress-card">
+            <div className="day-progress-header">
+              <span className="day-progress-title">今日进度</span>
+              <span className="day-progress-counter">
+                {done} / {total} 已完成 ({pct}%)
+              </span>
+            </div>
+            <div className="day-progress-track">
+              <div
+                className="day-progress-fill"
+                style={{ width: `${pct}%` }}
               />
-            ))}
-          </ul>
-        )}
-        {plan.writable ? (
-          <form className="add-form" onSubmit={onAdd}>
-            <input
-              value={draft}
-              onChange={(event) => setDraft(event.target.value)}
-              aria-label="Plan"
-              maxLength={200}
-            />
-          </form>
-        ) : null}
-        {plan.writable ? (
-          <InventoryAddBlock
-            items={inventory}
-            error={inventoryError}
-            onSchedule={onScheduleHere}
-          />
-        ) : null}
-      </section>
-      <section className="column">
-        <h2>Errands</h2>
-        {plan.errands.length === 0 ? null : (
-          <ul className="todos">
-            {plan.errands.map((errand, index) => (
-              <ErrandRow
-                key={errand.id}
-                errand={errand}
-                index={index}
-                count={plan.errands.length}
-                writable={plan.writable}
-                onToggle={onToggleErrand}
-                onRename={onRenameErrand}
-                onDelete={onDeleteErrand}
-                onMove={onMoveErrand}
+            </div>
+          </div>
+        );
+      })()}
+      <div className="day-columns">
+        <section className="column">
+          <div className="list-heading">
+            <h2>Plan</h2>
+            {plan.writable ? (
+              <button
+                type="button"
+                className="linkish quiet"
+                onClick={() => navigate("/recurrences?kind=plan")}
+              >
+                定期…
+              </button>
+            ) : null}
+          </div>
+          {plan.todos.length === 0 ? (
+            <p className="column-empty">
+              今天还没有计划，直接添加或从 To Do 选择。
+            </p>
+          ) : (
+            <ul className="todos">
+              {plan.todos.map((todo) => (
+                <TodoRow
+                  key={todo.taskId}
+                  todo={todo}
+                  writable={plan.writable}
+                  onToggle={onToggle}
+                  onRename={onRename}
+                  onDelete={onDelete}
+                  onUnschedule={onUnschedule}
+                  onClocks={(todo, start, end) => {
+                    void apply(() =>
+                      setTodoClocks(plan.date, todo.taskId, start, end),
+                    );
+                  }}
+                />
+              ))}
+            </ul>
+          )}
+          {plan.writable ? (
+            <form className="add-form" onSubmit={onAdd}>
+              <input
+                value={draft}
+                onChange={(event) => setDraft(event.target.value)}
+                aria-label="Plan"
+                placeholder="添加计划事项 (Enter 保存)..."
+                maxLength={200}
               />
-            ))}
-          </ul>
-        )}
-        {plan.writable ? (
-          <form className="add-form" onSubmit={onAddErrand}>
-            <input
-              value={errandDraft}
-              onChange={(event) => setErrandDraft(event.target.value)}
-              aria-label="Errands"
-              maxLength={200}
+            </form>
+          ) : null}
+          {plan.writable ? (
+            <InventoryAddBlock
+              items={inventory}
+              error={inventoryError}
+              onSchedule={onScheduleHere}
             />
-          </form>
-        ) : null}
-      </section>
+          ) : null}
+        </section>
+        <section className="column">
+          <div className="list-heading">
+            <h2>Errands</h2>
+            {plan.writable ? (
+              <button
+                type="button"
+                className="linkish quiet"
+                onClick={() => navigate("/recurrences?kind=errand")}
+              >
+                定期…
+              </button>
+            ) : null}
+          </div>
+          {plan.errands.length === 0 ? (
+            <p className="column-empty">今天还没有零碎事项。</p>
+          ) : (
+            <ul className="todos">
+              {plan.errands.map((errand) => (
+                <ErrandRow
+                  key={errand.id}
+                  errand={errand}
+                  writable={plan.writable}
+                  onToggle={onToggleErrand}
+                  onRename={onRenameErrand}
+                  onDelete={onDeleteErrand}
+                  onClocks={(errand, start, end) => {
+                    void apply(() =>
+                      setErrandClocks(errand.id, start, end),
+                    );
+                  }}
+                />
+              ))}
+            </ul>
+          )}
+          {plan.writable ? (
+            <form className="add-form" onSubmit={onAddErrand}>
+              <input
+                value={errandDraft}
+                onChange={(event) => setErrandDraft(event.target.value)}
+                aria-label="Errands"
+                placeholder="添加零碎事项 (Enter 保存)..."
+                maxLength={200}
+              />
+            </form>
+          ) : null}
+        </section>
+      </div>
     </main>
   );
 }
 
 type TodoRowProps = {
   todo: Todo;
-  index: number;
-  count: number;
   writable: boolean;
-  today: string;
   onToggle: (todo: Todo) => void;
   onRename: (todo: Todo, title: string) => void;
   onDelete: (todo: Todo) => void;
   onUnschedule: (todo: Todo) => void;
-  onReschedule: (todo: Todo, date: string) => void;
-  onMove: (todo: Todo, delta: -1 | 1) => void;
+  onClocks: (
+    todo: Todo,
+    start: string | null,
+    end: string | null,
+  ) => void;
 };
 
 function TodoRow({
   todo,
-  index,
-  count,
   writable,
-  today,
   onToggle,
   onRename,
   onDelete,
   onUnschedule,
-  onReschedule,
-  onMove,
+  onClocks,
 }: TodoRowProps) {
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(todo.title);
@@ -573,46 +590,37 @@ function TodoRow({
           {todo.title}
         </button>
       )}
+      {todo.recurrence ? (
+        <span className="badge recurrence-badge">
+          {todo.recurrence.label === "固定周期"
+            ? "定期"
+            : `定期 · ${todo.recurrence.label}`}
+        </span>
+      ) : null}
+      <span className="clock-row">
+        <ClockField
+          label="Start"
+          value={todo.startClock}
+          disabled={!writable}
+          onChange={(start) => onClocks(todo, start, todo.endClock)}
+        />
+        <ClockField
+          label="End"
+          value={todo.endClock}
+          disabled={!writable}
+          onChange={(end) => onClocks(todo, todo.startClock, end)}
+        />
+      </span>
       {writable ? (
         <span className="todo-actions">
-          {count >= 2 ? (
-            <>
-              <button
-                type="button"
-                className="linkish quiet"
-                disabled={index === 0}
-                aria-label="Move up"
-                onClick={() => onMove(todo, -1)}
-              >
-                Up
-              </button>
-              <button
-                type="button"
-                className="linkish quiet"
-                disabled={index === count - 1}
-                aria-label="Move down"
-                onClick={() => onMove(todo, 1)}
-              >
-                Down
-              </button>
-            </>
-          ) : null}
           {!todo.completedOnDay ? (
-            <>
-              <button
-                type="button"
-                className="linkish quiet"
-                onClick={() => onUnschedule(todo)}
-              >
-                Move to To Do
-              </button>
-              <DatePickButton
-                label="Reschedule"
-                min={today}
-                max={maxWritableDate(today)}
-                onPick={(nextDate) => onReschedule(todo, nextDate)}
-              />
-            </>
+            <button
+              type="button"
+              className="linkish quiet"
+              onClick={() => onUnschedule(todo)}
+            >
+              Move to To Do
+            </button>
           ) : null}
           <button type="button" className="linkish" onClick={() => onDelete(todo)}>
             Delete
@@ -666,24 +674,24 @@ function InventoryAddBlock({
 
 type ErrandRowProps = {
   errand: Errand;
-  index: number;
-  count: number;
   writable: boolean;
   onToggle: (errand: Errand) => void;
   onRename: (errand: Errand, title: string) => void;
   onDelete: (errand: Errand) => void;
-  onMove: (errand: Errand, delta: -1 | 1) => void;
+  onClocks: (
+    errand: Errand,
+    start: string | null,
+    end: string | null,
+  ) => void;
 };
 
 function ErrandRow({
   errand,
-  index,
-  count,
   writable,
   onToggle,
   onRename,
   onDelete,
-  onMove,
+  onClocks,
 }: ErrandRowProps) {
   const voided = isVoidedErrand(errand, writable);
   const [editing, setEditing] = useState(false);
@@ -760,39 +768,36 @@ function ErrandRow({
           {errand.title}
         </button>
       )}
-      {writable ? (
+      {errand.recurrence ? (
+        <span className="badge recurrence-badge">
+          {errand.recurrence.label === "固定周期"
+            ? "定期"
+            : `定期 · ${errand.recurrence.label}`}
+        </span>
+      ) : null}
+      <span className="clock-row">
+        <ClockField
+          label="Start"
+          value={errand.startClock}
+          disabled={!writable || voided}
+          onChange={(start) => onClocks(errand, start, errand.endClock)}
+        />
+        <ClockField
+          label="End"
+          value={errand.endClock}
+          disabled={!writable || voided}
+          onChange={(end) => onClocks(errand, errand.startClock, end)}
+        />
+      </span>
+      {writable && !voided ? (
         <span className="todo-actions">
-          {count >= 2 ? (
-            <>
-              <button
-                type="button"
-                className="linkish quiet"
-                disabled={index === 0}
-                aria-label="Move up"
-                onClick={() => onMove(errand, -1)}
-              >
-                Up
-              </button>
-              <button
-                type="button"
-                className="linkish quiet"
-                disabled={index === count - 1}
-                aria-label="Move down"
-                onClick={() => onMove(errand, 1)}
-              >
-                Down
-              </button>
-            </>
-          ) : null}
-          {!voided ? (
-            <button
-              type="button"
-              className="linkish"
-              onClick={() => onDelete(errand)}
-            >
-              Delete
-            </button>
-          ) : null}
+          <button
+            type="button"
+            className="linkish"
+            onClick={() => onDelete(errand)}
+          >
+            Delete
+          </button>
         </span>
       ) : null}
     </li>

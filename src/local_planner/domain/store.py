@@ -12,6 +12,8 @@ from local_planner.domain.models import (
     DayTaskEntry,
     Errand,
     ErrandId,
+    RecurrenceOccurrence,
+    RecurrenceSeries,
     Task,
     TaskId,
 )
@@ -60,6 +62,26 @@ class UnitOfWork(Protocol):
 
     def list_inventory_tasks(self) -> list[Task]: ...
 
+    def list_scheduled_after(self, today: CalendarDate) -> list[Task]: ...
+
+    def list_errands_after(self, today: CalendarDate) -> list[Errand]: ...
+
+    def get_recurrence(self, series_id: str) -> RecurrenceSeries | None: ...
+
+    def list_recurrences(self) -> list[RecurrenceSeries]: ...
+
+    def save_recurrence(self, series: RecurrenceSeries) -> None: ...
+
+    def get_occurrence(
+        self, series_id: str, occurrence_date: CalendarDate
+    ) -> RecurrenceOccurrence | None: ...
+
+    def save_occurrence(self, occurrence: RecurrenceOccurrence) -> None: ...
+
+    def get_planned_at(self, day: CalendarDate) -> str | None: ...
+
+    def set_day_planned(self, day: CalendarDate, planned_at: str) -> None: ...
+
     def is_proven_empty(self) -> bool: ...
 
     def earliest_relevant_date(self) -> CalendarDate | None: ...
@@ -84,6 +106,9 @@ class InMemoryUnitOfWork:
         self._days: dict[CalendarDate, DayRecord] = {}
         self._entries: dict[tuple[CalendarDate, TaskId], DayTaskEntry] = {}
         self._errands: dict[ErrandId, Errand] = {}
+        self._recurrences: dict[str, RecurrenceSeries] = {}
+        self._occurrences: dict[tuple[str, CalendarDate], RecurrenceOccurrence] = {}
+        self._planned: dict[CalendarDate, str] = {}
         self._task_seq = 0
         self._task_order: dict[TaskId, int] = {}
         self.meta = InMemoryMeta()
@@ -149,7 +174,9 @@ class InMemoryUnitOfWork:
         items = [
             t
             for t in self._tasks.values()
-            if t.completed_at is None and t.current_scheduled_date is None
+            if t.completed_at is None
+            and t.current_scheduled_date is None
+            and t.discarded_at is None
         ]
         items.sort(
             key=lambda t: (t.created_at, self._task_order.get(t.id, 0)),
@@ -157,8 +184,58 @@ class InMemoryUnitOfWork:
         )
         return items
 
+    def list_scheduled_after(self, today: CalendarDate) -> list[Task]:
+        items = [
+            t
+            for t in self._tasks.values()
+            if t.completed_at is None
+            and t.current_scheduled_date is not None
+            and t.current_scheduled_date > today
+        ]
+        items.sort(key=lambda t: (t.current_scheduled_date or "", t.title))
+        return items
+
+    def list_errands_after(self, today: CalendarDate) -> list[Errand]:
+        items = [
+            item for item in self._errands.values() if item.day_date > today
+        ]
+        items.sort(key=lambda item: (item.day_date, item.sort_order, item.id))
+        return items
+
+    def get_recurrence(self, series_id: str) -> RecurrenceSeries | None:
+        return self._recurrences.get(series_id)
+
+    def list_recurrences(self) -> list[RecurrenceSeries]:
+        items = [
+            item for item in self._recurrences.values() if item.deleted_at is None
+        ]
+        items.sort(key=lambda item: (item.state != "active", item.created_at, item.id))
+        return items
+
+    def save_recurrence(self, series: RecurrenceSeries) -> None:
+        self._recurrences[series.id] = series
+
+    def get_occurrence(
+        self, series_id: str, occurrence_date: CalendarDate
+    ) -> RecurrenceOccurrence | None:
+        return self._occurrences.get((series_id, occurrence_date))
+
+    def save_occurrence(self, occurrence: RecurrenceOccurrence) -> None:
+        self._occurrences[(occurrence.series_id, occurrence.occurrence_date)] = occurrence
+
+    def get_planned_at(self, day: CalendarDate) -> str | None:
+        return self._planned.get(day)
+
+    def set_day_planned(self, day: CalendarDate, planned_at: str) -> None:
+        self._planned[day] = planned_at
+
     def is_proven_empty(self) -> bool:
-        return not self._days and not self._entries and not self._errands
+        return (
+            not self._days
+            and not self._entries
+            and not self._errands
+            and not self._recurrences
+        )
 
     def earliest_relevant_date(self) -> CalendarDate | None:
         dates: list[CalendarDate] = []
@@ -169,6 +246,11 @@ class InMemoryUnitOfWork:
             task.current_scheduled_date
             for task in self._tasks.values()
             if task.current_scheduled_date is not None
+        )
+        dates.extend(
+            series.schedule_from
+            for series in self._recurrences.values()
+            if series.deleted_at is None
         )
         return min(dates) if dates else None
 

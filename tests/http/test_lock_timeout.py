@@ -80,7 +80,7 @@ def test_get_meta_is_503_when_lock_held(
                 started = time.monotonic()
                 health = client.get("/api/health")
                 assert health.status_code == 200
-                assert health.json() == {"ok": True}
+                assert health.json() == {"ok": True, "service": "local-planner"}
                 meta = client.get("/api/meta")
                 elapsed = time.monotonic() - started
                 assert meta.status_code == 503
