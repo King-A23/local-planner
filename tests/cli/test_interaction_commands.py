@@ -140,3 +140,62 @@ def test_capabilities_search_limits_and_context_do_not_generate_future_days(plan
     code, too_long, _ = run_cli(["search", "--query", "a" * 201])
     assert code == 1 and too_long["error"]["code"] == "ValidationError"
     assert invoke(run_cli, "search", "--query", " ")["items"] == []
+
+
+@pytest.mark.parametrize("kind,section,key", [("todo", "todos", "taskId"), ("errand", "errands", "id")])
+def test_move_uses_current_order_and_preserves_completed_slots(planner_home, run_cli, kind, section, key):
+    rows = []
+    for title, start in [("移走", "08:00"), ("完成对照", "09:00"), ("中间", "10:00"), ("置顶", "11:00")]:
+        day = invoke(run_cli, "day", kind, "add", "today", "--title", title, "--start", start)
+        rows.append(next(item for item in day[section] if item["title"] == title))
+    ids = [item[key] for item in rows]
+    # Stored order is deliberately different from automatic clock order, as it
+    # is after a user manually reorders then restores automatic sorting.
+    invoke(run_cli, "day", kind, "reorder", "today", ids[3], ids[1], ids[2], ids[0])
+    invoke(run_cli, "day", kind, "reorder", "today", "--automatic")
+    if kind == "todo":
+        invoke(run_cli, "day", "todo", "complete", "today", ids[1])
+        invoke(run_cli, "task", "schedule", ids[0], "--date", "tomorrow")
+    else:
+        invoke(run_cli, "errand", "complete", ids[1])
+        invoke(run_cli, "errand", "delete", ids[0])
+    before = invoke(run_cli, "context")
+    # Completion is now in slot 0, rather than slot 1 in the agent's old snapshot.
+    moved = invoke(run_cli, "day", kind, "move", "today", ids[3], "--first")
+    assert [item[key] for item in moved[section]] == [ids[1], ids[3], ids[2]]
+    assert moved["manualTodoOrder" if kind == "todo" else "manualErrandOrder"]
+    assert build_agent_receipt(before, invoke(run_cli, "context"))["counts"] == {"order_changed": 1}
+    for target in (["--last"], ["--before", ids[2]], ["--after", ids[2]]):
+        moved = invoke(run_cli, "day", kind, "move", "today", ids[3], *target)
+        expected = [ids[1], ids[3], ids[2]] if target[0] == "--before" else [ids[1], ids[2], ids[3]]
+        assert [item[key] for item in moved[section]] == expected
+    assert {item[key]: (item["title"], item["startClock"], item["notes"]) for item in moved[section]} == {
+        item[key]: (item["title"], item["startClock"], item["notes"]) for item in rows[1:]
+    }
+
+
+@pytest.mark.parametrize("kind,section,key", [("todo", "todos", "taskId"), ("errand", "errands", "id")])
+def test_move_rejects_stale_targets_and_invalid_arguments_atomically(planner_home, run_cli, kind, section, key):
+    row = invoke(run_cli, "day", kind, "add", "tomorrow", "--title", "未完成")[section][0]
+    done = next(item for item in invoke(run_cli, "day", kind, "add", "tomorrow", "--title", "已完成")[section] if item[key] != row[key])
+    if kind == "todo":
+        invoke(run_cli, "day", "todo", "complete", "tomorrow", done[key])
+    else:
+        invoke(run_cli, "errand", "complete", done[key])
+    before = invoke(run_cli, "day", "open", "tomorrow")
+    for item_id, target, error in [
+        (row[key], ["--before", done[key]], "Conflict"),
+        (done[key], ["--first"], "Conflict"),
+        ("missing", ["--first"], "Conflict"),
+        (row[key], ["--after", "missing"], "Conflict"),
+        (row[key], ["--before", row[key]], "ValidationError"),
+        (row[key], [], "UsageError"),
+        (row[key], ["--first", "--last"], "UsageError"),
+    ]:
+        code, result, _ = run_cli(["day", kind, "move", "tomorrow", item_id, *target])
+        assert code in (1, 2) and result["error"]["code"] == error
+        assert invoke(run_cli, "day", "open", "tomorrow") == before
+    code, result, _ = run_cli(["day", kind, "move", "2026-08-30", row[key], "--first"])
+    assert code == 1 and result["error"]["code"] == "DaySealed"
+    code, result, _ = run_cli(["day", kind, "move", "today", row[key], "--first"])
+    assert code == 1 and result["error"]["code"] == "Conflict"

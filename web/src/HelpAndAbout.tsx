@@ -21,7 +21,7 @@ export function AssistantUsage() {
   return <>
     <p>可添加事项、搜索标题和备注、修改详情、改期、移回待办、完成或恢复、调整顺序，也能设置时间、目标日期和定期事项。</p>
     <ul>{ASSISTANT_EXAMPLES.map((example) => <li key={example}>“{example}”</li>)}</ul>
-    <p className="settings-caption">标题重复时请带上日期。过去的记录只读，零碎事项不能跨日移动。完成区的展开和折叠由你在界面操作。助手有歧义或执行失败时会说明，请核对返回的改动。</p>
+    <p className="settings-caption">标题重复时请带上日期。过去的记录只读，零碎事项不能跨日移动。完成区的展开和折叠由你在界面操作。助手的询问和说明会直接显示在回执中；需要澄清时，补全原指令后重新发送，并核对返回的改动。</p>
   </>;
 }
 

@@ -43,6 +43,17 @@ def _edit(sub: argparse._SubParsersAction[DomainParser], kind: str) -> None:
     edit.add_argument("--expected-notes", required=True, help="最近读取的原始备注；空备注传空字符串")
 
 
+def _move(sub: argparse._SubParsersAction[DomainParser], kind: str) -> None:
+    move = _leaf(sub, "move", f"day.{kind}.move")
+    move.add_argument("date")
+    move.add_argument("item_id")
+    target = move.add_mutually_exclusive_group(required=True)
+    target.add_argument("--first", dest="position", action="store_const", const="first", help="移到未完成项首位")
+    target.add_argument("--last", dest="position", action="store_const", const="last", help="移到未完成项末尾")
+    target.add_argument("--before", metavar="ITEM_ID", help="移到同列未完成事项之前")
+    target.add_argument("--after", metavar="ITEM_ID", help="移到同列未完成事项之后")
+
+
 def build_domain_parser() -> DomainParser:
     parser = DomainParser(
         prog="python -m local_planner",
@@ -86,6 +97,7 @@ def build_domain_parser() -> DomainParser:
     todo_reorder.add_argument("date")
     todo_reorder.add_argument("task_ids", nargs="*")
     todo_reorder.add_argument("--automatic", action="store_true", help="恢复按时间排序，不传 ID")
+    _move(todo_sub, "todo")
 
     errand = _leaf(day_sub, "errand", "day.errand.add")
     errand_sub = errand.add_subparsers(dest="errand_cmd", required=True, parser_class=DomainParser)
@@ -98,6 +110,7 @@ def build_domain_parser() -> DomainParser:
     errand_reorder.add_argument("date")
     errand_reorder.add_argument("errand_ids", nargs="*")
     errand_reorder.add_argument("--automatic", action="store_true", help="恢复按时间排序，不传 ID")
+    _move(errand_sub, "errand")
 
     inventory = _leaf(top, "inventory", "inventory.list")
     inv_sub = inventory.add_subparsers(dest="inv_cmd", required=True, parser_class=DomainParser)

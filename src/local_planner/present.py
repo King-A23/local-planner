@@ -19,33 +19,12 @@ from local_planner.domain.models import (
 from local_planner.domain.recurrence import mask_to_weekdays, recurrence_matches
 from local_planner.domain.settlement import inclusive_range
 from local_planner.domain.store import UnitOfWork
-
-
-def appearance_sort_key(
-    start: str | None, end: str | None, sort_order: int
-) -> tuple[int, str, int]:
-    """Timed items first; earlier start (or end if no start) first; else stored order."""
-    has_time = start is not None or end is not None
-    return (0 if has_time else 1, start or end or "99:99", sort_order)
+from local_planner.domain.ordering import ordered_items
 
 
 def day_plan_payload(plan: DayPlan, today: str) -> dict[str, Any]:
-    todos = sorted(
-        plan.todos,
-        key=lambda item: appearance_sort_key(
-            item.start_clock, item.end_clock, item.sort_order
-        ),
-    )
-    errands = sorted(
-        plan.errands,
-        key=lambda item: appearance_sort_key(
-            item.start_clock, item.end_clock, item.sort_order
-        ),
-    )
-    if plan.manual_todo_order:
-        todos.sort(key=lambda item: item.sort_order)
-    if plan.manual_errand_order:
-        errands.sort(key=lambda item: item.sort_order)
+    todos = ordered_items(plan.todos, manual=plan.manual_todo_order)
+    errands = ordered_items(plan.errands, manual=plan.manual_errand_order)
     return {
         "date": plan.date,
         "manualTodoOrder": plan.manual_todo_order,

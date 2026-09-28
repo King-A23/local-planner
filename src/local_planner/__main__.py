@@ -29,9 +29,11 @@ Agent (JSON on stdout):
   day todo complete DATE TASK_ID
   day todo uncomplete DATE TASK_ID
   day todo reorder DATE [TASK_ID ...] [--automatic]
+  day todo move DATE TASK_ID (--first | --last | --before TASK_ID | --after TASK_ID)
   day todo time DATE TASK_ID [--start HH:MM] [--end HH:MM]
   day errand add DATE --title TEXT [--start HH:MM] [--end HH:MM]
   day errand reorder DATE [ERRAND_ID ...] [--automatic]
+  day errand move DATE ERRAND_ID (--first | --last | --before ERRAND_ID | --after ERRAND_ID)
   inventory list
   inventory add --title TEXT [--target-date DATE]
   inventory complete TASK_ID
@@ -55,6 +57,7 @@ Agent (JSON on stdout):
 
 DATE is YYYY-MM-DD, today or tomorrow (Asia/Shanghai server clock).
 Reorder requires every item ID, including completed items; --automatic takes no IDs.
+Move adjusts one unfinished item using current order, preserving completed slots and other relative order.
 Edit preserves omitted fields and rejects stale expected values. Notes: at most 10000 characters.
 --pretty / --human apply to agent commands.
 """

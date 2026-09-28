@@ -201,7 +201,11 @@ export function AgentPanel({ open, onClose, onOpen, triggerRef, surface, date, o
   const result = run?.result;
   const feedback = Boolean(run && (active || (result && dismissed !== run.id)));
   const output = [result?.stdout, result?.stderr].filter(Boolean).join("\n").trim();
-  const status = run ? STATUSES[run.status] ?? run.status : "";
+  // Final model replies include clarifications and limitations absent from the
+  // database diff. Keep them visible; the raw transcript stays in the details.
+  const reply = result?.stdout?.replace(/^\s*[-*]?\s*`?(?:PROCESS_CLEANUP_COMPLETE|INTENTIONAL_BACKGROUND_PROCESS_RETAINED|PROCESS_CLEANUP_BLOCKED)`?\s*$/gm, "").replace(/`?(?:PROCESS_CLEANUP_COMPLETE|INTENTIONAL_BACKGROUND_PROCESS_RETAINED|PROCESS_CLEANUP_BLOCKED)`?/g, "").trim();
+  const status = run?.status === "succeeded" && !result?.receipt?.changed && reply
+    ? "助手已回复" : run ? STATUSES[run.status] ?? run.status : "";
 
   return createPortal(
     <aside id="agent-panel" className="agent-drawer agent-dock-layer" aria-label="计划助手" hidden={!open}>
@@ -225,6 +229,7 @@ export function AgentPanel({ open, onClose, onOpen, triggerRef, surface, date, o
             {paused && <p className="agent-run-hint">{edited ? "将结束旧执行，保留已有改动，再读取当前计划执行新指令。" : "可修改下面的指令。本机执行已挂起；已发出的远端请求可能仍在继续。"}</p>}
           </> : <>
             {result?.message && <p className="agent-feedback">{result.message}</p>}
+            {reply && <p className="agent-reply" aria-label="助手回复">{reply}</p>}
             {result?.receipt && <AgentChangeReceipt receipt={result.receipt} />}
             {output && <details className="agent-output"><summary>查看执行详情</summary><pre>{output}</pre></details>}
             {!result?.ok && <button type="button" className="linkish" onClick={() => { setPrompt(run.prompt); promptRef.current?.focus(); }}>编辑指令后重试</button>}

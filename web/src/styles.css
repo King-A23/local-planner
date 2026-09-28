@@ -2953,6 +2953,7 @@ select:focus-visible {
 .agent-run-hint, .agent-connection { font-size: 0.78rem; color: var(--color-muted); margin: 0.5rem 0 0; }
 .agent-connection, .agent-dock-wrapper > .error { pointer-events: auto; background: var(--surface-raised); padding: 0.6rem; width: 100%; }
 .agent-output summary { cursor: pointer; font-size: 0.8rem; }
+.agent-reply { margin: 0.6rem 0; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 10rem; overflow: auto; font-size: 0.9rem; line-height: 1.65; }
 .agent-output pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 12rem; overflow: auto; }
 .layout[data-agent-open="true"] .page { padding-bottom: 17rem; }
 

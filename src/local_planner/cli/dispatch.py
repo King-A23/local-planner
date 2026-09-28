@@ -124,6 +124,12 @@ def _run(args: Any, today: str, clock: Any, uow: Any) -> dict[str, Any]:
             ),
             today,
         )
+    if command in ("day.todo.move", "day.errand.move"):
+        return day_plan_payload(cmds.move_unfinished_item(
+            clock, uow, _resolve_date(args.date, today), command.split(".")[1], args.item_id,
+            position=args.position or ("before" if args.before is not None else "after"),
+            relative_to=args.before if args.before is not None else args.after,
+        ), today)
     if command == "day.todo.reorder":
         date = _resolve_date(args.date, today)
         ids = args.task_ids

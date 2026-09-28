@@ -8,8 +8,9 @@ from dataclasses import replace
 from datetime import date
 
 from local_planner.clock import Clock, SystemClock, format_utc
-from local_planner.domain.errors import Conflict, DaySealed, NotFound
+from local_planner.domain.errors import Conflict, DaySealed, NotFound, ValidationError
 from local_planner.domain.time import validate_clock_pair
+from local_planner.domain.ordering import ordered_items
 from local_planner.domain.models import (
     CalendarDate,
     DayPlan,
@@ -504,6 +505,45 @@ def reorder_errands(
     ensure_open_day(uow, iso)
     uow.save_day(replace(uow.get_day(iso), manual_errand_order=manual))
     return open_day(clock, uow, iso)
+
+
+def move_unfinished_item(
+    clock: Clock, uow: UnitOfWork, d: CalendarDate, kind: str, item_id: str,
+    *, position: str, relative_to: str | None = None,
+) -> DayPlan:
+    """Move one visible row against current state, retaining completed row slots.
+
+    Callers hold the same transaction/lock as other commands. Reading and merging
+    here avoids an agent replaying a full order from before a move or completion.
+    """
+    if kind not in ("todo", "errand") or position not in ("first", "last", "before", "after"):
+        raise ValidationError("无效的排序位置")
+    if (position in ("before", "after")) != (relative_to is not None):
+        raise ValidationError("相对排序必须指定参照事项")
+    iso = require_writable_day(clock, uow, d)
+    plan = open_day(clock, uow, iso)
+    if kind == "todo":
+        rows = ordered_items(plan.todos, manual=plan.manual_todo_order)
+        all_ids = [row.task_id for row in rows]
+        active = [row.task_id for row in rows if not row.completed_on_day]
+    else:
+        rows = ordered_items(plan.errands, manual=plan.manual_errand_order)
+        all_ids = [row.id for row in rows]
+        active = [row.id for row in rows if row.status == "open"]
+    if item_id not in active or (relative_to is not None and relative_to not in active):
+        raise Conflict("只能调整该日同一列中未完成的事项，请重新读取列表")
+    if relative_to == item_id:
+        raise ValidationError("参照事项不能是事项本身")
+    moved = [value for value in active if value != item_id]
+    index = 0 if position == "first" else len(moved)
+    if relative_to is not None:
+        index = moved.index(relative_to) + (position == "after")
+    moved.insert(index, item_id)
+    visible = set(active)
+    ordered = iter(moved)
+    merged = [next(ordered) if value in visible else value for value in all_ids]
+    reorder = reorder_todos if kind == "todo" else reorder_errands
+    return reorder(clock, uow, iso, merged)
 
 
 def set_target_date(
