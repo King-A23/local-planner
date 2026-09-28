@@ -1,12 +1,10 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState, type HTMLAttributes, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type HTMLAttributes, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
 export type ItemAction = { label: string; run: () => void; disabled?: boolean; danger?: boolean; separator?: boolean };
 
-/** The row and its visible button open the same keyboard-accessible menu. */
-export function ItemRow({ id, title, actions, children, ...props }: {
-  id: string; title: string; actions: ItemAction[]; children: ReactNode;
-} & HTMLAttributes<HTMLLIElement>) {
+/** Shared by list rows and standalone section menus. */
+function useItemMenu(title: string, actions: ItemAction[]) {
   const [anchor, setAnchor] = useState<{ x: number; y: number } | null>(null);
   const [position, setPosition] = useState({ left: 0, top: 0 });
   const button = useRef<HTMLButtonElement>(null);
@@ -49,15 +47,16 @@ export function ItemRow({ id, title, actions, children, ...props }: {
       window.removeEventListener("scroll", scroll, true);
     };
   }, [anchor]);
-  return <li {...props} data-item-id={id} onContextMenu={(event) => {
-    if (event.target instanceof Element && event.target.closest("input, textarea, [contenteditable=true]")) return;
+  const onContextMenu = (event: MouseEvent<HTMLElement>) => {
+    if (!actions.length || (event.target instanceof Element && event.target.closest("input, textarea, [contenteditable=true]"))) return;
     event.preventDefault(); open(event.clientX, event.clientY);
-  }} onKeyDown={(event) => {
-    if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
+  };
+  const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    if (actions.length && (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10"))) {
       event.preventDefault(); const rect = button.current!.getBoundingClientRect(); open(rect.right - 208, rect.bottom + 4);
     }
-  }}>
-    {children}
+  };
+  const content = actions.length > 0 ? <>
     <button ref={button} type="button" className="item-menu-trigger" aria-label={`更多操作：${title}`} title="更多操作"
       aria-haspopup="menu" aria-expanded={Boolean(anchor)} aria-controls={anchor ? menuId : undefined}
       onClick={() => { if (anchor) close(); else { const rect = button.current!.getBoundingClientRect(); open(rect.right - 208, rect.bottom + 4); } }}
@@ -78,5 +77,19 @@ export function ItemRow({ id, title, actions, children, ...props }: {
         className={`${action.danger ? "danger" : ""} ${action.separator ? "menu-separator" : ""}`}
         onClick={() => { close(true); action.run(); }}>{action.label}</button>)}
     </div>, document.body)}
-  </li>;
+  </> : null;
+  return { content, onContextMenu, onKeyDown };
+}
+
+/** The row and its visible button open the same keyboard-accessible menu. */
+export function ItemRow({ id, title, actions, children, ...props }: {
+  id: string; title: string; actions: ItemAction[]; children: ReactNode;
+} & HTMLAttributes<HTMLLIElement>) {
+  const { content, ...handlers } = useItemMenu(title, actions);
+  return <li {...props} data-item-id={id} {...handlers}>{children}{content}</li>;
+}
+
+export function ItemMenu({ title, actions }: { title: string; actions: ItemAction[] }) {
+  const { content, ...handlers } = useItemMenu(title, actions);
+  return <div className="item-menu" {...handlers}>{content}</div>;
 }
