@@ -9,12 +9,12 @@ import "./styles.css";
 
 document.title = isSettingsWindow ? `设置 · ${DISPLAY_NAME}` : DISPLAY_NAME;
 function applyTheme(selected: string | null) {
-  if (selected && ["warm-paper", "midnight", "nordic", "forest", "retro"].includes(selected)) document.documentElement.setAttribute("data-theme", selected);
+  document.documentElement.setAttribute("data-theme", selected && ["warm-paper", "midnight", "nordic", "forest", "retro"].includes(selected) ? selected : "warm-paper");
 }
 try {
   const selected = new URLSearchParams(window.location.search).get("theme") ?? localStorage.getItem("planner_theme");
   applyTheme(selected);
-} catch { /* use default theme when storage is unavailable */ }
+} catch { applyTheme(null); }
 window.addEventListener("storage", (event) => { if (event.key === "planner_theme") applyTheme(event.newValue); });
 window.addEventListener("planner:theme-changed", (event) => applyTheme((event as CustomEvent<string>).detail));
 

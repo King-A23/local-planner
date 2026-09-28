@@ -5,6 +5,30 @@ TODAY = "2026-08-30"
 NEXT = "2026-08-31"
 
 
+def test_quick_reschedule_keeps_details_and_clocks_without_duplicate_entries(client):
+    plan = client.post(f"/api/days/{TODAY}/todos", json={
+        "title": "准备材料", "startClock": "09:00", "endClock": "10:30",
+    }).json()
+    item = plan["todos"][0]
+    assert edit(client, item, "附上报告").status_code == 200
+    path = f"/api/tasks/{item['taskId']}/schedule"
+    moved = client.post(path, json={"date": NEXT})
+    assert moved.status_code == 200
+    entry = moved.json()["todos"][0]
+    assert (entry["taskId"], entry["title"], entry["notes"], entry["startClock"], entry["endClock"]) == (
+        item["taskId"], "准备材料", "附上报告", "09:00", "10:30",
+    )
+    assert client.get(f"/api/days/{TODAY}").json()["todos"] == []
+    assert client.post(path, json={"date": NEXT}).json()["todos"] == [entry]
+    # A rejected destination must not remove the source or lose its timing.
+    assert client.post(path, json={"date": "2026-08-29"}).status_code == 409
+    assert client.get(f"/api/days/{NEXT}").json()["todos"] == [entry]
+    assert client.post(path, json={"date": TODAY}).json()["todos"][0]["startClock"] == "09:00"
+    client.post(f"/api/days/{TODAY}/todos/{item['taskId']}/complete")
+    assert client.post(path, json={"date": NEXT}).status_code == 409
+    assert client.get(f"/api/days/{TODAY}").json()["todos"][0]["completedOnDay"]
+
+
 def add(client, title="报告"):
     return client.post("/api/inventory/tasks", json={"title": title}).json()
 

@@ -1,7 +1,10 @@
 import { openItemEditor, NotesMark } from "./ItemEditor";
 import { useItemFocus } from "./useItemFocus";
 import { useEntryKeyboard } from "./useEntryKeyboard";
-import { ReorderList, type ReorderRow } from "./ReorderList";
+import { type ReorderRow } from "./ReorderList";
+import { CompletionList } from "./CompletionList";
+import { ItemRow, type ItemAction } from "./ItemActions";
+import { useItemOptions } from "./ItemOptions";
 import { WelcomeTip } from "./WelcomeTip";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
@@ -30,11 +33,10 @@ import {
   type PlanningStatus,
   type Todo,
 } from "./api";
-import { TaskDetails, ClockSummary } from "./TaskDetails";
+import { ClockSummary } from "./TaskDetails";
 import { useQuickAdd } from "./useQuickAdd";
-import { ClockField } from "./ClockField";
 import { INVENTORY_INLINE_LIMIT } from "./constants";
-import { addCivilDays, formatDayHeading } from "./dates";
+import { addCivilDays, formatDayHeading, maxWritableDate } from "./dates";
 import { handleNavClick, navigate } from "./route";
 
 type DayViewProps = {
@@ -173,11 +175,11 @@ export function DayView({
     } finally { addingRef.current = false; }
   }
 
-  function onToggle(todo: Todo): void {
+  async function onToggle(todo: Todo): Promise<boolean> {
     if (!plan?.writable) {
-      return;
+      return false;
     }
-    void apply(() =>
+    return apply(() =>
       todo.completedOnDay
         ? uncompleteTodo(plan.date, todo.taskId)
         : completeTodo(plan.date, todo.taskId),
@@ -276,11 +278,11 @@ export function DayView({
     } finally { addingErrandRef.current = false; }
   }
 
-  function onToggleErrand(errand: Errand): void {
+  async function onToggleErrand(errand: Errand): Promise<boolean> {
     if (!plan?.writable || isVoidedErrand(errand, plan.writable)) {
-      return;
+      return false;
     }
-    void apply(() =>
+    return apply(() =>
       errand.status === "completed"
         ? uncompleteErrand(errand.id)
         : completeErrand(errand.id),
@@ -365,25 +367,15 @@ export function DayView({
               先写下今天想做的一件事，也可以从待办里挑选。
             </p>
           ) : (
-            <ReorderList key={`todos-${plan.date}`} items={plan.todos} getId={(item) => item.taskId} getLabel={(item) => item.title}
-              writable={plan.writable} onReorder={(ids) => apply(async () => { await reorderTodos(plan.date, ids); return openDay(plan.date); })}>
-              {(todo, reorder) => (
-                <TodoRow
-                  key={todo.taskId}
-                  todo={todo}
-                  writable={plan.writable}
-                  onToggle={onToggle}
-                  reorder={reorder}
-                  onDelete={onDelete}
-                  onUnschedule={onUnschedule}
-                  onClocks={(todo, start, end) => {
-                    void apply(() =>
-                      setTodoClocks(plan.date, todo.taskId, start, end),
-                    );
-                  }}
-                />
+            <CompletionList key={`todos-${plan.date}-${plan.writable}`} items={plan.todos} getId={(item) => item.taskId} getLabel={(item) => item.title}
+              isCompleted={(item) => item.completedOnDay} writable={plan.writable} onToggle={onToggle}
+              onReorder={(ids) => apply(async () => { await reorderTodos(plan.date, ids); return openDay(plan.date); })}>
+              {(todo, reorder, toggle, busy, settling) => (
+                <TodoRow key={todo.taskId} todo={todo} writable={plan.writable} date={plan.date} today={plan.serverToday}
+                  onToggle={toggle} busy={busy} settling={settling} reorder={reorder} onDelete={onDelete} onUnschedule={onUnschedule}
+                  onSchedule={(target) => void apply(async () => { await scheduleTask(todo.taskId, target); onInventoryChange?.(); return openDay(plan.date); })} />
               )}
-            </ReorderList>
+            </CompletionList>
           )}
           {plan.writable ? (
             <form className="add-form" onSubmit={onAdd}>
@@ -423,24 +415,14 @@ export function DayView({
           {plan.errands.length === 0 ? (
             <p className="column-empty">取快递、买杯咖啡……当天的小事记在这里。</p>
           ) : (
-            <ReorderList key={`errands-${plan.date}`} items={plan.errands} getId={(item) => item.id} getLabel={(item) => item.title}
-              writable={plan.writable} onReorder={(ids) => apply(async () => { await reorderErrands(plan.date, ids); return openDay(plan.date); })}>
-              {(errand, reorder) => (
-                <ErrandRow
-                  key={errand.id}
-                  errand={errand}
-                  writable={plan.writable}
-                  onToggle={onToggleErrand}
-                  reorder={reorder}
-                  onDelete={onDeleteErrand}
-                  onClocks={(errand, start, end) => {
-                    void apply(() =>
-                      setErrandClocks(errand.id, start, end),
-                    );
-                  }}
-                />
+            <CompletionList key={`errands-${plan.date}-${plan.writable}`} items={plan.errands} getId={(item) => item.id} getLabel={(item) => item.title}
+              isCompleted={(item) => item.status === "completed"} writable={plan.writable} onToggle={onToggleErrand}
+              onReorder={(ids) => apply(async () => { await reorderErrands(plan.date, ids); return openDay(plan.date); })}>
+              {(errand, reorder, toggle, busy, settling) => (
+                <ErrandRow key={errand.id} errand={errand} writable={plan.writable} onToggle={toggle}
+                  busy={busy} settling={settling} reorder={reorder} onDelete={onDeleteErrand} />
               )}
-            </ReorderList>
+            </CompletionList>
           )}
           {plan.writable ? (
             <form className="add-form" onSubmit={onAddErrand}>
@@ -461,85 +443,39 @@ export function DayView({
 }
 
 type TodoRowProps = {
-  todo: Todo;
-  writable: boolean;
-  onToggle: (todo: Todo) => void;
-  reorder: ReorderRow;
-  onDelete: (todo: Todo) => void;
-  onUnschedule: (todo: Todo) => void;
-  onClocks: (
-    todo: Todo,
-    start: string | null,
-    end: string | null,
-  ) => void;
+  todo: Todo; writable: boolean; date: string; today: string; busy: boolean; settling: boolean;
+  onToggle: () => void; reorder: ReorderRow; onDelete: (todo: Todo) => void;
+  onUnschedule: (todo: Todo) => void; onSchedule: (date: string) => void;
 };
 
-function TodoRow({
-  todo,
-  writable,
-  onToggle,
-  reorder,
-  onDelete,
-  onUnschedule,
-  onClocks,
-}: TodoRowProps) {
-  return (
-    <li className={todo.completedOnDay ? "todo done" : "todo"} data-item-id={todo.taskId} {...reorder.attributes}>
-      {reorder.handle}
-      <input
-        type="checkbox"
-        checked={todo.completedOnDay}
-        disabled={!writable}
-        onChange={() => onToggle(todo)}
-        aria-label={todo.title}
-      />
-      <button type="button" className="title" onClick={() => openItemEditor({ id: todo.taskId, kind: "task", title: todo.title, notes: todo.notes, writable })}>
-        {todo.title}<NotesMark notes={todo.notes} />
-      </button>
-      {todo.recurrence ? (
-        <span className="badge recurrence-badge">
-          {todo.recurrence.label === "固定周期"
-            ? "定期"
-            : `定期 · ${todo.recurrence.label}`}
-        </span>
-      ) : null}
-      <ClockSummary start={todo.startClock} end={todo.endClock} />
-      {writable ? (
-        <TaskDetails title={todo.title}>
-      <span className="clock-row">
-        <ClockField
-          label="开始"
-          value={todo.startClock}
-          disabled={!writable}
-          onChange={(start) => onClocks(todo, start, todo.endClock)}
-        />
-        <ClockField
-          label="结束"
-          value={todo.endClock}
-          disabled={!writable}
-          onChange={(end) => onClocks(todo, todo.startClock, end)}
-        />
-      </span>
-      {writable ? (
-        <span className="todo-actions">
-          {!todo.completedOnDay ? (
-            <button
-              type="button"
-              className="linkish quiet"
-              onClick={() => onUnschedule(todo)}
-            >
-              移回待办
-            </button>
-          ) : null}
-          <button type="button" className="linkish" onClick={() => onDelete(todo)}>
-            删除
-          </button>
-        </span>
-      ) : null}
-        </TaskDetails>
-      ) : null}
-    </li>
-  );
+function TodoRow({ todo, writable, date, today, busy, settling, onToggle, reorder, onDelete, onUnschedule, onSchedule }: TodoRowProps) {
+  const options = useItemOptions();
+  const edit = () => openItemEditor({ id: todo.taskId, kind: "task", title: todo.title, notes: todo.notes, writable });
+  const tomorrow = addCivilDays(today, 1);
+  const actions: ItemAction[] = [{ label: writable ? "编辑详情…" : "查看详情…", run: edit }];
+  if (writable) {
+    actions.push({ label: todo.completedOnDay ? "恢复为未完成" : "标记已完成", run: onToggle, disabled: busy });
+    if (!todo.completedOnDay) actions.push(
+      { label: "安排到今天", separator: true, disabled: busy || date === today, run: () => onSchedule(today) },
+      { label: "安排到明天", disabled: busy || date === tomorrow, run: () => onSchedule(tomorrow) },
+      { label: "选择日期…", disabled: busy, run: () => options.show({ title: todo.title, kind: "date", date, min: today, max: maxWritableDate(today), save: (values) => scheduleTask(todo.taskId, values.date) }) },
+      { label: "移回待办", disabled: busy, run: () => onUnschedule(todo) },
+    );
+    actions.push(
+      { label: "设置时间…", separator: true, disabled: busy, run: () => options.show({ title: todo.title, kind: "time", start: todo.startClock, end: todo.endClock, save: (values) => setTodoClocks(date, todo.taskId, values.start || null, values.end || null) }) },
+      { label: "删除", separator: true, danger: true, disabled: busy, run: () => onDelete(todo) },
+    );
+  }
+  return <ItemRow id={todo.taskId} title={todo.title} actions={actions} {...reorder.attributes}
+    className={`todo${todo.completedOnDay ? " done" : ""}${settling ? " completing" : ""}`}>
+    {reorder.handle}
+    <input type="checkbox" checked={todo.completedOnDay} disabled={!writable} aria-disabled={busy || undefined}
+      onChange={() => { if (!busy) onToggle(); }} aria-label={todo.title} />
+    <button type="button" className="title" onClick={edit}>{todo.title}<NotesMark notes={todo.notes} /></button>
+    {todo.recurrence && <span className="badge recurrence-badge">{todo.recurrence.label === "固定周期" ? "定期" : `定期 · ${todo.recurrence.label}`}</span>}
+    <ClockSummary start={todo.startClock} end={todo.endClock} />
+    {options.dialog}
+  </ItemRow>;
 }
 
 function InventoryAddBlock({
@@ -584,88 +520,29 @@ function InventoryAddBlock({
 }
 
 type ErrandRowProps = {
-  errand: Errand;
-  writable: boolean;
-  onToggle: (errand: Errand) => void;
-  reorder: ReorderRow;
-  onDelete: (errand: Errand) => void;
-  onClocks: (
-    errand: Errand,
-    start: string | null,
-    end: string | null,
-  ) => void;
+  errand: Errand; writable: boolean; busy: boolean; settling: boolean;
+  onToggle: () => void; reorder: ReorderRow; onDelete: (errand: Errand) => void;
 };
 
-function ErrandRow({
-  errand,
-  writable,
-  onToggle,
-  reorder,
-  onDelete,
-  onClocks,
-}: ErrandRowProps) {
+function ErrandRow({ errand, writable, busy, settling, onToggle, reorder, onDelete }: ErrandRowProps) {
   const voided = isVoidedErrand(errand, writable);
-  const className =
-    errand.status === "completed"
-      ? "todo done"
-      : voided
-        ? "todo expired"
-        : "todo";
-
-  return (
-    <li className={className} data-item-id={errand.id} {...reorder.attributes}>
-      {reorder.handle}
-      {voided ? (
-        <span className="badge">已作废</span>
-      ) : (
-        <input
-          type="checkbox"
-          checked={errand.status === "completed"}
-          disabled={!writable}
-          onChange={() => onToggle(errand)}
-          aria-label={errand.title}
-        />
-      )}
-      <button type="button" className="title" onClick={() => openItemEditor({ id: errand.id, kind: "errand", title: errand.title, notes: errand.notes, writable: writable && !voided })}>
-        {errand.title}<NotesMark notes={errand.notes} />
-      </button>
-      {errand.recurrence ? (
-        <span className="badge recurrence-badge">
-          {errand.recurrence.label === "固定周期"
-            ? "定期"
-            : `定期 · ${errand.recurrence.label}`}
-        </span>
-      ) : null}
-      <ClockSummary start={errand.startClock} end={errand.endClock} />
-      {writable && !voided ? (
-        <TaskDetails title={errand.title}>
-      <span className="clock-row">
-        <ClockField
-          label="开始"
-          value={errand.startClock}
-          disabled={!writable || voided}
-          onChange={(start) => onClocks(errand, start, errand.endClock)}
-        />
-        <ClockField
-          label="结束"
-          value={errand.endClock}
-          disabled={!writable || voided}
-          onChange={(end) => onClocks(errand, errand.startClock, end)}
-        />
-      </span>
-      {writable && !voided ? (
-        <span className="todo-actions">
-          <button
-            type="button"
-            className="linkish"
-            onClick={() => onDelete(errand)}
-          >
-            删除
-          </button>
-        </span>
-      ) : null}
-        </TaskDetails>
-      ) : null}
-    </li>
+  const editable = writable && !voided;
+  const options = useItemOptions();
+  const edit = () => openItemEditor({ id: errand.id, kind: "errand", title: errand.title, notes: errand.notes, writable: editable });
+  const actions: ItemAction[] = [{ label: editable ? "编辑详情…" : "查看详情…", run: edit }];
+  if (editable) actions.push(
+    { label: errand.status === "completed" ? "恢复为未完成" : "标记已完成", run: onToggle, disabled: busy },
+    { label: "设置时间…", separator: true, disabled: busy, run: () => options.show({ title: errand.title, kind: "time", start: errand.startClock, end: errand.endClock, save: (values) => setErrandClocks(errand.id, values.start || null, values.end || null) }) },
+    { label: "删除", separator: true, danger: true, disabled: busy, run: () => onDelete(errand) },
   );
+  return <ItemRow id={errand.id} title={errand.title} actions={actions} {...reorder.attributes}
+    className={`todo${errand.status === "completed" ? " done" : voided ? " expired" : ""}${settling ? " completing" : ""}`}>
+    {reorder.handle}
+    {voided ? <span className="badge">已作废</span> : <input type="checkbox" checked={errand.status === "completed"}
+      disabled={!writable} aria-disabled={busy || undefined} onChange={() => { if (!busy) onToggle(); }} aria-label={errand.title} />}
+    <button type="button" className="title" onClick={edit}>{errand.title}<NotesMark notes={errand.notes} /></button>
+    {errand.recurrence && <span className="badge recurrence-badge">{errand.recurrence.label === "固定周期" ? "定期" : `定期 · ${errand.recurrence.label}`}</span>}
+    <ClockSummary start={errand.startClock} end={errand.endClock} />
+    {options.dialog}
+  </ItemRow>;
 }

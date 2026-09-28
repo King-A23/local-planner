@@ -13,10 +13,10 @@ import {
   setTaskTarget,
   type InventoryItem,
 } from "./api";
-import { TaskDetails } from "./TaskDetails";
+import { ItemRow } from "./ItemActions";
+import { useItemOptions } from "./ItemOptions";
 import { useQuickAdd } from "./useQuickAdd";
-import { DatePickButton } from "./DatePickButton";
-import { maxWritableDate } from "./dates";
+import { addCivilDays, maxWritableDate } from "./dates";
 
 type InventoryPageProps = {
   today: string;
@@ -41,6 +41,7 @@ export function InventoryPage({
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [draftDate, setDraftDate] = useState("");
+  const options = useItemOptions();
   const maxDate = maxWritableDate(today);
   const quickAddRef = useQuickAdd(items !== null);
   const addingRef = useRef(false);
@@ -131,7 +132,15 @@ export function InventoryPage({
       ) : (
         <ul className="inventory-list">
           {items.map((item) => (
-            <li key={item.taskId} className="inventory-item" data-item-id={item.taskId}>
+            <ItemRow key={item.taskId} className="inventory-item" id={item.taskId} title={item.title} actions={[
+              { label: "编辑详情…", run: () => openItemEditor({ id: item.taskId, kind: "task", title: item.title, notes: item.notes, writable: true }) },
+              { label: "标记已完成", run: () => void mutate(() => completeInventoryTask(item.taskId)) },
+              { label: "安排到今天", separator: true, run: () => void mutate(() => scheduleTask(item.taskId, today)) },
+              { label: "安排到明天", run: () => void mutate(() => scheduleTask(item.taskId, addCivilDays(today, 1))) },
+              { label: "选择日期…", run: () => options.show({ title: item.title, kind: "date", date: today, min: today, max: maxDate, save: (values) => scheduleTask(item.taskId, values.date) }) },
+              { label: "目标日期…", separator: true, run: () => options.show({ title: item.title, kind: "target", date: item.targetDate ?? "", save: (values) => setTaskTarget(item.taskId, values.date || null) }) },
+              { label: "删除", separator: true, danger: true, run: () => void mutate(() => deleteTask(item.taskId)) },
+            ]}>
               <button type="button" className="title" onClick={() => openItemEditor({ id: item.taskId, kind: "task", title: item.title, notes: item.notes, writable: true })}>{item.title}<NotesMark notes={item.notes} /></button>
               {dueHint(item.targetDate) ? (
                 <span className="badge">{dueHint(item.targetDate)}</span>
@@ -149,50 +158,11 @@ export function InventoryPage({
                 >
                   加入今天
                 </button>
-              <TaskDetails title={item.title}>
-                <label className="target-label">目标日期 <small>只作参考，不会自动排入当天</small>
-              <input
-                type="date"
-                value={item.targetDate ?? ""}
-                onChange={(event) =>
-                  void mutate(() =>
-                    setTaskTarget(item.taskId, event.target.value || null),
-                  )
-                }
-                aria-label="目标日期（不会自动排入当天）"
-              />
-                </label>
-              <span className="todo-actions">
-                <button
-                  type="button"
-                  className="linkish"
-                  aria-label={`标记已完成：${item.title}`}
-                  onClick={() => void mutate(() => completeInventoryTask(item.taskId))}
-                >
-                  标记已完成
-                </button>
-                <DatePickButton
-                  label="安排到某天"
-                  min={today}
-                  max={maxDate}
-                  onPick={(date) =>
-                    void mutate(() => scheduleTask(item.taskId, date))
-                  }
-                />
-                <button
-                  type="button"
-                  className="linkish"
-                  aria-label={`删除：${item.title}`}
-                  onClick={() => void mutate(() => deleteTask(item.taskId))}
-                >
-                  删除
-                </button>
-              </span>
-              </TaskDetails>
-            </li>
+            </ItemRow>
           ))}
         </ul>
       )}
+      {options.dialog}
       <section className="inventory-composer" aria-labelledby="inventory-composer-title">
         <h2 id="inventory-composer-title" className="inventory-composer-title">
           先记下来，以后再安排

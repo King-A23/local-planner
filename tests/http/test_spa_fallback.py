@@ -237,7 +237,6 @@ def test_inventory_schedule_and_inline_add_ui() -> None:
 
     assert "<h1>待办</h1>" in inventory
     assert "加入今天" in inventory
-    assert 'label="安排到某天"' in inventory
     assert "addToInventory" in inventory
     assert "scheduleTask" in inventory
     assert "inventory-composer-title" in inventory
@@ -289,15 +288,11 @@ def test_v2_clocks_and_agent_panel_ui() -> None:
     agent = (src / "AgentPanel.tsx").read_text(encoding="utf-8")
     api = (src / "api.ts").read_text(encoding="utf-8")
 
-    assert "ClockField" in day_view
-    assert 'label="开始"' in day_view
-    assert 'label="结束"' in day_view
     assert 'type="range"' not in clock
     assert "SLOT_COUNT" not in clock
     assert "new Date(" not in clock
     assert "目标日已过" in inventory
     assert "目标日是今天" in inventory
-    assert 'aria-label="目标日期（不会自动排入当天）"' in inventory
     assert "setTaskTarget" in inventory
     planning = (src / "DailyPlanningPage.tsx").read_text(encoding="utf-8")
     assert "AgentPanel" in app

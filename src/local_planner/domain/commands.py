@@ -220,6 +220,7 @@ def schedule_to_date(
     if task.completed_at is not None:
         raise Conflict("任务已完成")
     current = task.current_scheduled_date
+    previous_entry = uow.get_entry(current, task_id) if current is not None else None
     if current == iso and uow.get_entry(iso, task_id) is not None:
         return open_day(clock, uow, iso)
     if current is not None and current != iso:
@@ -244,6 +245,8 @@ def schedule_to_date(
                 notes_snapshot=task.notes,
                 sort_order=_next_sort(uow.list_entries(iso)),
                 completed_on_day=False,
+                start_clock=previous_entry.start_clock if previous_entry else None,
+                end_clock=previous_entry.end_clock if previous_entry else None,
                 series_id=task.series_id,
                 occurrence_date=task.occurrence_date,
             )
