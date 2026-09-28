@@ -130,6 +130,34 @@ def test_added_entities_and_stable_summary() -> None:
     }
 
 
+def test_goal_phase_and_task_association_changes_are_in_agent_receipt() -> None:
+    before = _context()
+    after = _context()
+    after["goals"] = [{
+        "id": "g1", "title": "通过 CSP", "notes": "", "horizonText": "明年",
+        "state": "active", "nextTaskId": "t1", "phases": [{
+            "id": "p1", "goalId": "g1", "title": "基础", "notes": "", "position": 0, "status": "open",
+        }], "tasks": [{
+            "taskId": "t1", "title": "刷题", "goalId": "g1", "phaseId": "p1",
+        }],
+    }]
+    receipt = build_agent_receipt(before, after)
+    assert receipt["counts"] == {
+        "goal_created": 1,
+    }
+
+    changed = deepcopy(after)
+    changed["goals"][0]["nextTaskId"] = None
+    changed["goals"][0]["phases"][0]["status"] = "done"
+    changed["goals"][0]["tasks"] = []
+    receipt = build_agent_receipt(after, changed)
+    assert receipt["counts"] == {
+        "phase_updated": 1,
+        "task_unlinked_goal": 1,
+        "goal_next_changed": 1,
+    }
+
+
 def test_task_moves_cover_today_inventory_and_future_reschedule() -> None:
     before = _context()
     before["inventory"] = [

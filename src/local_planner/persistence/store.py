@@ -9,6 +9,8 @@ from typing import Iterator
 
 from local_planner.domain.models import (
     CalendarDate,
+    Goal,
+    GoalPhase,
     DayRecord,
     DayTaskEntry,
     Errand,
@@ -68,10 +70,58 @@ class SqliteUnitOfWork:
             self.conn.rollback()
             raise
 
+    def get_goal(self, goal_id: str) -> Goal | None:
+        row = self.conn.execute("SELECT * FROM goals WHERE id = ?", (goal_id,)).fetchone()
+        return Goal(**dict(row)) if row else None
+
+    def list_goals(self) -> list[Goal]:
+        return [Goal(**dict(row)) for row in self.conn.execute("SELECT * FROM goals ORDER BY created_at DESC, id DESC")]
+
+    def save_goal(self, goal: Goal) -> None:
+        self.conn.execute("""
+            INSERT INTO goals (id, title, notes, horizon_text, state, end_reason,
+              next_task_id, focus_phase_id, revision, created_at, updated_at, ended_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET title=excluded.title, notes=excluded.notes,
+              horizon_text=excluded.horizon_text, state=excluded.state, end_reason=excluded.end_reason,
+              next_task_id=excluded.next_task_id, focus_phase_id=excluded.focus_phase_id,
+              revision=excluded.revision, updated_at=excluded.updated_at, ended_at=excluded.ended_at
+        """, (goal.id, goal.title, goal.notes, goal.horizon_text, goal.state, goal.end_reason,
+              goal.next_task_id, goal.focus_phase_id, goal.revision, goal.created_at, goal.updated_at, goal.ended_at))
+
+    def get_phase(self, phase_id: str) -> GoalPhase | None:
+        row = self.conn.execute("SELECT * FROM goal_phases WHERE id = ?", (phase_id,)).fetchone()
+        return GoalPhase(**dict(row)) if row else None
+
+    def list_phases(self, goal_id: str) -> list[GoalPhase]:
+        return [GoalPhase(**dict(row)) for row in self.conn.execute("SELECT * FROM goal_phases WHERE goal_id = ? ORDER BY position, id", (goal_id,))]
+
+    def save_phase(self, phase: GoalPhase) -> None:
+        self.conn.execute("""
+            INSERT INTO goal_phases (id, goal_id, title, notes, position, status) VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET title=excluded.title, notes=excluded.notes,
+                position=excluded.position, status=excluded.status
+        """, (phase.id, phase.goal_id, phase.title, phase.notes, phase.position, phase.status))
+
+    def list_goal_tasks(self, goal_id: str) -> list[Task]:
+        rows = self.conn.execute("""
+            SELECT t.*, ro.series_id AS recurrence_series_id, ro.occurrence_date AS recurrence_occurrence_date
+            FROM tasks t LEFT JOIN recurrence_occurrences ro ON ro.kind = 'plan' AND ro.entity_id = t.id
+            WHERE t.goal_id = ? AND t.discarded_at IS NULL ORDER BY t.created_at, t.id
+        """, (goal_id,))
+        return [_task_from_row(row) for row in rows]
+
+    def get_goal_request(self, request_id: str) -> tuple[str, str] | None:
+        row = self.conn.execute("SELECT fingerprint, goal_id FROM goal_requests WHERE request_id = ?", (request_id,)).fetchone()
+        return (row["fingerprint"], row["goal_id"]) if row else None
+
+    def save_goal_request(self, request_id: str, fingerprint: str, goal_id: str) -> None:
+        self.conn.execute("INSERT INTO goal_requests (request_id, fingerprint, goal_id) VALUES (?, ?, ?)", (request_id, fingerprint, goal_id))
+
     def get_task(self, task_id: TaskId) -> Task | None:
         row = self.conn.execute(
             "SELECT t.id, t.title, t.created_at, t.current_scheduled_date, "
-            "t.completed_at, t.completed_on_date, t.target_date, t.discarded_at, t.notes, "
+            "t.completed_at, t.completed_on_date, t.target_date, t.discarded_at, t.notes, t.goal_id, t.phase_id, "
             "ro.series_id AS recurrence_series_id, "
             "ro.occurrence_date AS recurrence_occurrence_date "
             "FROM tasks t LEFT JOIN recurrence_occurrences ro "
@@ -85,8 +135,8 @@ class SqliteUnitOfWork:
             """
             INSERT INTO tasks (
               id, title, created_at, current_scheduled_date,
-              completed_at, completed_on_date, target_date, discarded_at, notes
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+              completed_at, completed_on_date, target_date, discarded_at, notes, goal_id, phase_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
               title = excluded.title,
               created_at = excluded.created_at,
@@ -95,7 +145,9 @@ class SqliteUnitOfWork:
               completed_on_date = excluded.completed_on_date,
               target_date = excluded.target_date,
               discarded_at = excluded.discarded_at,
-              notes = excluded.notes
+              notes = excluded.notes,
+              goal_id = excluded.goal_id,
+              phase_id = excluded.phase_id
             """,
             (
                 task.id,
@@ -107,6 +159,8 @@ class SqliteUnitOfWork:
                 task.target_date,
                 task.discarded_at,
                 task.notes,
+                task.goal_id,
+                task.phase_id,
             ),
         )
 
@@ -144,6 +198,7 @@ class SqliteUnitOfWork:
         row = self.conn.execute(
             "SELECT e.day_date, e.task_id, e.title_snapshot, e.notes_snapshot, e.sort_order, "
             "e.completed_on_day, e.start_clock, e.end_clock, "
+            "e.goal_id_snapshot, e.goal_title_snapshot, e.phase_id_snapshot, e.phase_title_snapshot, "
             "ro.series_id AS recurrence_series_id, "
             "ro.occurrence_date AS recurrence_occurrence_date "
             "FROM day_task_entries e LEFT JOIN recurrence_occurrences ro "
@@ -157,6 +212,7 @@ class SqliteUnitOfWork:
         rows = self.conn.execute(
             "SELECT e.day_date, e.task_id, e.title_snapshot, e.notes_snapshot, e.sort_order, "
             "e.completed_on_day, e.start_clock, e.end_clock, "
+            "e.goal_id_snapshot, e.goal_title_snapshot, e.phase_id_snapshot, e.phase_title_snapshot, "
             "ro.series_id AS recurrence_series_id, "
             "ro.occurrence_date AS recurrence_occurrence_date "
             "FROM day_task_entries e LEFT JOIN recurrence_occurrences ro "
@@ -170,6 +226,7 @@ class SqliteUnitOfWork:
         rows = self.conn.execute(
             "SELECT e.day_date, e.task_id, e.title_snapshot, e.notes_snapshot, e.sort_order, "
             "e.completed_on_day, e.start_clock, e.end_clock, "
+            "e.goal_id_snapshot, e.goal_title_snapshot, e.phase_id_snapshot, e.phase_title_snapshot, "
             "ro.series_id AS recurrence_series_id, "
             "ro.occurrence_date AS recurrence_occurrence_date "
             "FROM day_task_entries e LEFT JOIN recurrence_occurrences ro "
@@ -185,15 +242,20 @@ class SqliteUnitOfWork:
             """
             INSERT INTO day_task_entries (
               day_date, task_id, title_snapshot, sort_order, completed_on_day,
-              start_clock, end_clock, notes_snapshot
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+              start_clock, end_clock, notes_snapshot,
+              goal_id_snapshot, goal_title_snapshot, phase_id_snapshot, phase_title_snapshot
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(day_date, task_id) DO UPDATE SET
               title_snapshot = excluded.title_snapshot,
               sort_order = excluded.sort_order,
               completed_on_day = excluded.completed_on_day,
               start_clock = excluded.start_clock,
               end_clock = excluded.end_clock,
-              notes_snapshot = excluded.notes_snapshot
+              notes_snapshot = excluded.notes_snapshot,
+              goal_id_snapshot = excluded.goal_id_snapshot,
+              goal_title_snapshot = excluded.goal_title_snapshot,
+              phase_id_snapshot = excluded.phase_id_snapshot,
+              phase_title_snapshot = excluded.phase_title_snapshot
             """,
             (
                 entry.day_date,
@@ -204,6 +266,10 @@ class SqliteUnitOfWork:
                 entry.start_clock,
                 entry.end_clock,
                 entry.notes_snapshot,
+                entry.goal_id_snapshot,
+                entry.goal_title_snapshot,
+                entry.phase_id_snapshot,
+                entry.phase_title_snapshot,
             ),
         )
 
@@ -275,7 +341,7 @@ class SqliteUnitOfWork:
         rows = self.conn.execute(
             """
             SELECT t.id, t.title, t.created_at, t.current_scheduled_date,
-                   t.completed_at, t.completed_on_date, t.target_date, t.discarded_at, t.notes,
+                   t.completed_at, t.completed_on_date, t.target_date, t.discarded_at, t.notes, t.goal_id, t.phase_id,
                    ro.series_id AS recurrence_series_id,
                    ro.occurrence_date AS recurrence_occurrence_date
             FROM tasks t
@@ -292,7 +358,7 @@ class SqliteUnitOfWork:
         rows = self.conn.execute(
             """
             SELECT t.id, t.title, t.created_at, t.current_scheduled_date,
-                   t.completed_at, t.completed_on_date, t.target_date, t.discarded_at, t.notes,
+                   t.completed_at, t.completed_on_date, t.target_date, t.discarded_at, t.notes, t.goal_id, t.phase_id,
                    ro.series_id AS recurrence_series_id,
                    ro.occurrence_date AS recurrence_occurrence_date
             FROM tasks t
@@ -465,6 +531,8 @@ def _task_from_row(row: sqlite3.Row) -> Task:
         id=row["id"],
         title=row["title"],
         notes=row["notes"],
+        goal_id=row["goal_id"],
+        phase_id=row["phase_id"],
         created_at=row["created_at"],
         current_scheduled_date=row["current_scheduled_date"],
         completed_at=row["completed_at"],
@@ -500,6 +568,10 @@ def _entry_from_row(row: sqlite3.Row) -> DayTaskEntry:
         task_id=row["task_id"],
         title_snapshot=row["title_snapshot"],
         notes_snapshot=row["notes_snapshot"],
+        goal_id_snapshot=row["goal_id_snapshot"],
+        goal_title_snapshot=row["goal_title_snapshot"],
+        phase_id_snapshot=row["phase_id_snapshot"],
+        phase_title_snapshot=row["phase_title_snapshot"],
         sort_order=int(row["sort_order"]),
         completed_on_day=bool(row["completed_on_day"]),
         start_clock=row["start_clock"] if "start_clock" in row.keys() else None,

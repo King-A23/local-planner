@@ -10,7 +10,7 @@ type ShellProps = {
   inventoryCount?: number;
   today?: string;
   viewedDate?: string;
-  activeSection?: "today" | "inventory" | "recurrences" | "settings";
+  activeSection?: "today" | "inventory" | "recurrences" | "goals" | "settings";
   onSearch: () => void;
   agentOpen: boolean;
   agentStatus?: string | null;
@@ -60,6 +60,13 @@ export function Shell({
             onClick={(e) => handleNavClick(e, "/recurrences")}
           >
             定期事项
+          </a>
+          <a
+            href="/goals"
+            aria-current={activeSection === "goals" ? "page" : undefined}
+            onClick={(e) => handleNavClick(e, "/goals")}
+          >
+            目标
           </a>
           <button
             type="button"

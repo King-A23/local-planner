@@ -125,6 +125,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         add(view, "今天", #selector(goToday), "1", target: self)
         add(view, "待办", #selector(goInventory), "2", target: self)
         add(view, "定期事项", #selector(goRecurrences), "3", target: self)
+        add(view, "目标", #selector(goGoals), "4", target: self)
         view.addItem(.separator())
         add(view, "重新载入", #selector(reload), "r", target: self)
         add(view, "放大", #selector(zoomIn), "=", target: self)
@@ -608,6 +609,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     @objc private func goToday() { navigate("") }
     @objc private func goInventory() { navigate("inventory") }
     @objc private func goRecurrences() { navigate("recurrences") }
+    @objc private func goGoals() { navigate("goals") }
     @objc private func goSettings() { showSettings() }
     @objc private func goHelp() { showSettings(fragment: "help") }
     @objc private func goAbout() { showSettings(fragment: "about") }

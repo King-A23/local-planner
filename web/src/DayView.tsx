@@ -472,6 +472,7 @@ function TodoRow({ todo, writable, date, today, busy, settling, onToggle, reorde
     <input type="checkbox" checked={todo.completedOnDay} disabled={!writable} aria-disabled={busy || undefined}
       onChange={() => { if (!busy) onToggle(); }} aria-label={todo.title} />
     <button type="button" className="title" onClick={edit}>{todo.title}<NotesMark notes={todo.notes} /></button>
+    {todo.goalId && todo.goalTitle && <a className="goal-context-link" href={`/goals/${todo.goalId}`} onClick={(event) => handleNavClick(event, `/goals/${todo.goalId}`)}>目标：{todo.goalTitle}{todo.phaseTitle ? ` · ${todo.phaseTitle}` : ""}</a>}
     {todo.recurrence && <span className="badge recurrence-badge">{todo.recurrence.label === "固定周期" ? "定期" : `定期 · ${todo.recurrence.label}`}</span>}
     <ClockSummary start={todo.startClock} end={todo.endClock} />
     {options.dialog}

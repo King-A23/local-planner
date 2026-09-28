@@ -18,7 +18,16 @@ def test_context_includes_today_inventory_and_scheduled_ahead(planner_home, run_
     assert {item["title"] for item in data["todos"]} == {"今天的事"}
     assert {item["title"] for item in data["inventory"]} == {"还不定哪天"}
     assert data["scheduledAhead"] == [
-        {"taskId": task_id, "title": "周四答辩", "notes": "", "date": "2026-09-03"}
+        {
+            "taskId": task_id,
+            "title": "周四答辩",
+            "notes": "",
+            "date": "2026-09-03",
+            "goalId": None,
+            "phaseId": None,
+            "goalTitle": None,
+            "phaseTitle": None,
+        }
     ]
     assert "errands" in data
     assert data["inventoryCount"] == 1

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 def capabilities_payload() -> dict:
     return {
-        "version": 1,
+        "version": 2,
         "commands": [
             {"name": "search", "usage": "search --query TEXT", "description": "搜索待办、今天和已创建未来日期的未完成事项，匹配标题和备注"},
             {"name": "task.edit", "usage": "task edit TASK_ID [--title TEXT] [--notes TEXT | --clear-notes] --expected-title TEXT --expected-notes TEXT", "description": "原子修改标题和备注，省略字段保留原值；必须传入最近读取的原文，冲突不覆盖"},
@@ -20,6 +20,20 @@ def capabilities_payload() -> dict:
             {"name": "day.errand.reorder", "usage": "day errand reorder DATE [ERRAND_ID ...] [--automatic]", "description": "手动排序必须包含该日所有零碎事项 ID（含已完成）；--automatic 恢复按时间排序"},
             {"name": "day.todo.move", "usage": "day todo move DATE TASK_ID (--first | --last | --before TASK_ID | --after TASK_ID)", "description": "优先用于单项置顶、置底或相对移动；在同一事务读取当前顺序，只移动未完成项，保留已完成项槽位与其余项相对顺序"},
             {"name": "day.errand.move", "usage": "day errand move DATE ERRAND_ID (--first | --last | --before ERRAND_ID | --after ERRAND_ID)", "description": "移动同日同列的未完成零碎事项，保留已完成项槽位；不能跨日期或跨列"},
+            {"name": "goal.list", "usage": "goal list", "description": "列出目标、当前阶段和下一步"},
+            {"name": "goal.show", "usage": "goal show GOAL_ID", "description": "读取一个目标的完整阶段、关联任务和最新 revision"},
+            {"name": "goal.create", "usage": "goal create --title TEXT --request-id ID --recovery-generation GENERATION [--notes TEXT] [--horizon-text TEXT]", "description": "创建目标；GENERATION 取 context.recoveryGeneration，空值传 none"},
+            {"name": "goal.edit", "usage": "goal edit GOAL_ID --title TEXT --notes TEXT --horizon-text TEXT --expected-revision N --recovery-generation GENERATION", "description": "完整编辑目标文本，revision 冲突后必须重新读取"},
+            {"name": "goal.state", "usage": "goal state GOAL_ID --state active|paused|ended --expected-revision N --recovery-generation GENERATION [--end-reason achieved|abandoned]", "description": "暂停、结束或恢复目标，不改动已有任务"},
+            {"name": "goal.add-task", "usage": "goal add-task GOAL_ID --title TEXT --request-id ID --expected-revision N --recovery-generation GENERATION [--notes TEXT] [--phase-id ID]", "description": "创建一个普通 To Do 并关联目标；不生成路线或周期事项"},
+            {"name": "goal.link-task", "usage": "goal link-task GOAL_ID TASK_ID --expected-goal-id ID|none --expected-revision N --recovery-generation GENERATION [--phase-id ID]", "description": "关联已有任务；任务已有其他目标时必须先解除关联"},
+            {"name": "goal.unlink-task", "usage": "goal unlink-task GOAL_ID TASK_ID --expected-revision N --recovery-generation GENERATION", "description": "解除关联；若它是下一步会一并清空"},
+            {"name": "goal.next", "usage": "goal next GOAL_ID --task-id TASK_ID|none --expected-revision N --recovery-generation GENERATION", "description": "设定或清空唯一下一步；只能选择未完成的关联任务"},
+            {"name": "goal.schedule-next", "usage": "goal schedule-next GOAL_ID --expected-task-id TASK_ID --expected-scheduled-date DATE|none --expected-revision N --recovery-generation GENERATION", "description": "把当前下一步排到今天；保留已有时钟，暂停目标不可执行"},
+            {"name": "goal.phase.add", "usage": "goal phase add GOAL_ID --title TEXT --request-id ID --expected-revision N --recovery-generation GENERATION [--notes TEXT]", "description": "添加扁平阶段"},
+            {"name": "goal.phase.edit", "usage": "goal phase edit GOAL_ID PHASE_ID --title TEXT --notes TEXT --status open|done|skipped --expected-revision N --recovery-generation GENERATION", "description": "完整编辑阶段；结束或跳过不会完成任务"},
+            {"name": "goal.phase.focus", "usage": "goal phase focus GOAL_ID --phase-id PHASE_ID|none --expected-revision N --recovery-generation GENERATION", "description": "设置当前 open 阶段，或清空"},
+            {"name": "goal.phase.reorder", "usage": "goal phase reorder GOAL_ID PHASE_ID... --expected-revision N --recovery-generation GENERATION", "description": "完整无重复阶段列表的排序"},
         ],
         "dateTokens": ["YYYY-MM-DD", "today", "tomorrow"],
         "timezone": "Asia/Shanghai",
@@ -32,5 +46,8 @@ def capabilities_payload() -> dict:
             "重排前 day open DATE 获取完整列表；只调整未完成项时，在原列表槽位替换这些 ID，保留已完成项槽位。",
             "先完成改期、新增、完成等操作，再排序。单项移动优先用 move；全量 reorder 必须在前序操作后重新读取，不能用旧上下文重放顺序。",
             "备注是纯文本；--notes 替换全部备注；追加时基于最近读取的备注拼接，Conflict 后重新读取，不盲目覆盖。",
+            "目标写入先读取 goal show 获取最新 revision 和 context.recoveryGeneration；每次写入显式携带二者。恢复数据后旧 generation 一律不可写入。",
+            "目标只有一个明确下一步。任务完成、删除或解除关联可能清空下一步；撤销完成不抢回后来选择的下一步。暂停和结束绝不级联完成、删除或改排任务。",
+            "阶段是可选扁平列表。完成或跳过阶段不会完成其任务；不要生成百分比、依赖关系、自动排程或整条 AI 路线。",
         ],
     }

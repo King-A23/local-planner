@@ -138,7 +138,7 @@ def test_debug_read(client: TestClient) -> None:
     assert body["today"] == TODAY
     assert body["timezone"] == "Asia/Shanghai"
     assert body["lastSettledDate"] == TODAY
-    assert body["schemaVersion"] == 7
+    assert body["schemaVersion"] == 8
     assert body["integrityCheck"] == "ok"
     assert "dbPath" in body
     assert set(body["counts"]) == {"tasks", "openDays", "sealedDays", "errands"}

@@ -110,13 +110,29 @@ class AgentRuns:
         self.threads: list[threading.Thread] = []
         self.closed = False
 
-    def start(self, request_id: str, launcher_id: str, prompt: str, work: Callable[[RunControl], dict], *, surface: str = "today", date: str | None = None) -> dict:
+    def start(
+        self,
+        request_id: str,
+        launcher_id: str,
+        prompt: str,
+        work: Callable[[RunControl], dict],
+        *,
+        surface: str = "today",
+        date: str | None = None,
+        goal_id: str | None = None,
+    ) -> dict:
         with self.lock:
             if self.closed:
                 raise Conflict("应用正在退出")
             for run in self.runs.values():
                 if run["requestId"] == request_id:
-                    if run["launcherId"] != launcher_id or run["prompt"] != prompt or run["surface"] != surface or run["date"] != date:
+                    if (
+                        run["launcherId"] != launcher_id
+                        or run["prompt"] != prompt
+                        or run["surface"] != surface
+                        or run["date"] != date
+                        or run["goalId"] != goal_id
+                    ):
                         raise Conflict("请求已提交，请刷新执行状态")
                     return self._payload(run)
                 if run["control"].status in ACTIVE:
@@ -130,7 +146,8 @@ class AgentRuns:
             run_id = str(uuid.uuid4())
             control = RunControl()
             run = {"id": run_id, "requestId": request_id, "launcherId": launcher_id,
-                   "prompt": prompt, "surface": surface, "date": date, "control": control, "result": None}
+                   "prompt": prompt, "surface": surface, "date": date,
+                   "goalId": goal_id, "control": control, "result": None}
             self.runs[run_id] = run
             while len(self.runs) > 20:
                 del self.runs[next(iter(self.runs))]
@@ -157,7 +174,7 @@ class AgentRuns:
     def _payload(self, run: dict) -> dict:
         control = run["control"]
         with control.lock:
-            return {key: run[key] for key in ("id", "requestId", "launcherId", "prompt", "surface", "date", "result")} | {
+            return {key: run[key] for key in ("id", "requestId", "launcherId", "prompt", "surface", "date", "goalId", "result")} | {
                 "status": control.status, "elapsedSeconds": round(control.elapsed(), 1),
             }
 

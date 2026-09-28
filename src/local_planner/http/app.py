@@ -24,6 +24,7 @@ from local_planner.domain.undo import delete_with_undo, undo_delete
 from local_planner.recovery import ensure_daily_backup
 from local_planner.launcher_health import check_launcher
 from local_planner.http.recovery_routes import mount_recovery
+from local_planner.http.goals_routes import mount_goals
 from local_planner.agent_receipts import build_agent_receipt
 from local_planner.agent_runs import AgentRuns, RunControl
 from local_planner.clock import Clock
@@ -110,8 +111,10 @@ class LauncherBody(BaseModel):
 
 class PromptBody(BaseModel):
     prompt: str
-    surface: Literal["today", "todo", "day"] = "today"
+    surface: Literal["today", "todo", "day", "goals", "goal"] = "today"
     date: str | None = None
+    goalId: str | None = None
+    recoveryGeneration: str | None = None
 
 
 class AgentRunBody(PromptBody):
@@ -827,6 +830,20 @@ def create_app(
             raise NotFound("找不到该启动器") from None
         return {"ok": True}
 
+    def _validate_agent_surface(body: PromptBody) -> None:
+        if body.surface == "goal" and not body.goalId:
+            raise ValidationError("目标页面缺少目标 ID")
+        if body.surface != "goal" and body.goalId is not None:
+            raise ValidationError("当前页面不支持目标 ID")
+        def validate(_today: str) -> dict[str, Any]:
+            if body.surface in {"goals", "goal"}:
+                if body.recoveryGeneration != ctx.uow.meta.get("recovery_generation"):
+                    raise Conflict("数据已恢复，请刷新目标后再使用助手")
+            if body.surface == "goal" and ctx.uow.get_goal(body.goalId or "") is None:
+                raise NotFound("找不到目标")
+            return {}
+        _locked(ctx, validate)
+
     def execute_agent(launcher_id: str, body: PromptBody, control: RunControl | None = None) -> dict[str, Any]:
         items = load_launchers(ctx.data_dir)
         found = next((item for item in items if item.id == launcher_id), None)
@@ -834,7 +851,10 @@ def create_app(
             raise NotFound("找不到该启动器")
         before = _locked(
             ctx,
-            lambda today: context_payload(ctx.clock, ctx.uow, today),
+            lambda today: context_payload(
+                ctx.clock, ctx.uow, today,
+                surface=body.surface, goal_id=body.goalId,
+            ),
         )
         result = run_launcher(
             found,
@@ -844,11 +864,15 @@ def create_app(
             data_root=ctx.data_dir,
             surface=body.surface,
             date=body.date,
+            goal_id=body.goalId,
             **({"control": control} if control else {}),
         )
         after = _locked(
             ctx,
-            lambda today: context_payload(ctx.clock, ctx.uow, today),
+            lambda today: context_payload(
+                ctx.clock, ctx.uow, today,
+                surface=body.surface, goal_id=body.goalId,
+            ),
         )
         receipt = build_agent_receipt(before, after)
         status = (
@@ -872,10 +896,12 @@ def create_app(
     @app.post("/api/launchers/{launcher_id}/run")
     def run_agent(launcher_id: str, body: PromptBody) -> dict[str, Any]:
         # Legacy synchronous callers also participate in the one-run lease.
+        _validate_agent_surface(body)
         if not any(item.id == launcher_id for item in load_launchers(ctx.data_dir)):
             raise NotFound("找不到该启动器")
         run = runs.start(str(uuid.uuid4()), launcher_id, body.prompt,
-                         lambda control: execute_agent(launcher_id, body, control), surface=body.surface, date=body.date)
+                         lambda control: execute_agent(launcher_id, body, control),
+                         surface=body.surface, date=body.date, goal_id=body.goalId)
         while (latest := runs.get(run["id"]))["result"] is None:
             time.sleep(0.02)
         return latest["result"]
@@ -884,10 +910,12 @@ def create_app(
     def start_agent(body: AgentRunBody) -> dict[str, Any]:
         if not body.prompt.strip():
             raise ValidationError("请先写下要助手做的事")
+        _validate_agent_surface(body)
         if not any(item.id == body.launcherId for item in load_launchers(ctx.data_dir)):
             raise NotFound("找不到该启动器")
         return runs.start(body.requestId, body.launcherId, body.prompt,
-                          lambda control: execute_agent(body.launcherId, body, control), surface=body.surface, date=body.date)
+                          lambda control: execute_agent(body.launcherId, body, control),
+                          surface=body.surface, date=body.date, goal_id=body.goalId)
 
     @app.get("/api/agent-runs")
     def latest_agent() -> dict[str, Any]:
@@ -901,6 +929,7 @@ def create_app(
     def control_agent(run_id: str, action: Literal["pause", "resume", "stop"]) -> dict[str, Any]:
         return runs.control(run_id, action)
 
+    mount_goals(app, ctx, _locked)
     mount_recovery(app, ctx, PLANNER_LOCK)
 
     if dist_dir is not None:

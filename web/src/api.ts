@@ -7,6 +7,10 @@ export type Todo = {
   startClock: string | null;
   endClock: string | null;
   recurrence: RecurrenceOccurrence | null;
+  goalId?: string | null;
+  goalTitle?: string | null;
+  phaseId?: string | null;
+  phaseTitle?: string | null;
 };
 
 export type ErrandStatus = "open" | "completed" | "expired";
@@ -58,6 +62,60 @@ export type InventoryItem = {
   createdAt: string;
   targetDate: string | null;
   recurrence?: RecurrenceOccurrence | null;
+  goalId?: string | null;
+  goalTitle?: string | null;
+  phaseId?: string | null;
+  phaseTitle?: string | null;
+};
+
+export type GoalState = "active" | "paused" | "ended";
+export type GoalEndReason = "achieved" | "abandoned" | null;
+export type GoalPhaseStatus = "open" | "done" | "skipped";
+
+export type GoalTask = {
+  taskId: string;
+  title: string;
+  notes: string;
+  goalId: string | null;
+  phaseId: string | null;
+  scheduledDate: string | null;
+  completed: boolean;
+  targetDate: string | null;
+  seriesId: string | null;
+  goalTitle?: string | null;
+  phaseTitle?: string | null;
+};
+
+export type GoalPhase = {
+  id: string;
+  goalId: string;
+  title: string;
+  notes: string;
+  position: number;
+  status: GoalPhaseStatus;
+};
+
+export type Goal = {
+  id: string;
+  title: string;
+  notes: string;
+  horizonText: string;
+  state: GoalState;
+  endReason: GoalEndReason;
+  nextTaskId: string | null;
+  focusPhaseId: string | null;
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+  endedAt: string | null;
+  phases: GoalPhase[];
+  tasks: GoalTask[];
+};
+
+export type GoalList = {
+  items: Goal[];
+  serverToday: string;
+  recoveryGeneration: string | null;
 };
 
 export type PlanningStatus = "unplanned" | "ready";
@@ -166,6 +224,60 @@ export type Calendar = {
 
 export function getMeta(): Promise<Meta> {
   return fetch("/api/meta").then((r) => readJson<Meta>(r));
+}
+
+export function listGoals(): Promise<GoalList> {
+  return fetch("/api/goals").then((r) => readJson<GoalList>(r));
+}
+
+export function getGoal(id: string): Promise<Goal & Pick<GoalList, "serverToday" | "recoveryGeneration">> {
+  return fetch(`/api/goals/${encodeURIComponent(id)}`).then((r) =>
+    readJson<Goal & Pick<GoalList, "serverToday" | "recoveryGeneration">>(r),
+  );
+}
+
+export function listGoalCandidates(): Promise<{ items: GoalTask[] }> {
+  return fetch("/api/goals/candidates").then((r) => readJson<{ items: GoalTask[] }>(r));
+}
+
+export function createGoal(input: {
+  title: string;
+  notes?: string;
+  horizonText?: string;
+  requestId: string;
+  recoveryGeneration: string | null;
+}): Promise<Goal & Pick<GoalList, "serverToday" | "recoveryGeneration">> {
+  return jsonRequest("/api/goals", { method: "POST", body: JSON.stringify(input) }).then((r) =>
+    readJson<Goal & Pick<GoalList, "serverToday" | "recoveryGeneration">>(r),
+  );
+}
+
+export type GoalActionInput = {
+  operation:
+    | "edit"
+    | "state"
+    | "add-task"
+    | "link-task"
+    | "unlink-task"
+    | "next"
+    | "schedule-next"
+    | "add-phase"
+    | "edit-phase"
+    | "focus-phase"
+    | "reorder-phases";
+  expectedRevision: number;
+  recoveryGeneration: string | null;
+  [key: string]: unknown;
+};
+
+export function changeGoal(
+  id: string,
+  input: GoalActionInput,
+): Promise<Goal & Pick<GoalList, "serverToday" | "recoveryGeneration">> {
+  return jsonRequest(`/api/goals/${encodeURIComponent(id)}/actions`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  }).then((r) => readJson<Goal & Pick<GoalList, "serverToday" | "recoveryGeneration">>(r));
 }
 
 export function getTodayPlanning(): Promise<TodayPlanning> {

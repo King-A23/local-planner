@@ -4,6 +4,9 @@
 
 | 文件 | 作用 |
 | --- | --- |
+| [goals-implementation.md](goals-implementation.md) | 已确认的目标、下一步与轻量阶段首版范围、接口及验证约定 |
+| [goals-validation.md](goals-validation.md) | 目标功能测试覆盖、独立窗口操作和真实 Luna 验证 |
+| [goals-compatibility.md](goals-compatibility.md) | 目标数据迁移、旧备份恢复与兼容限制 |
 | [macos-desktop.md](macos-desktop.md) | macOS 桌面入口、构建安装与进程生命周期 |
 | [interaction-polish.md](interaction-polish.md) | 备注、搜索、排序、完成反馈与快捷改期 |
 | [agent-interactions.md](agent-interactions.md) | 新交互的 Agent CLI、能力发现、上下文、回执与设置说明 |

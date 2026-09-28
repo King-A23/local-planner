@@ -59,6 +59,18 @@ _TYPE_ORDER = {
     "recurrence_resumed": -2,
     "recurrence_stopped": -1,
     "recurrence_deleted": 0,
+    "goal_created": 16,
+    "goal_updated": 17,
+    "goal_paused": 18,
+    "goal_resumed": 19,
+    "goal_ended": 20,
+    "phase_added": 21,
+    "phase_updated": 22,
+    "phase_order_changed": 23,
+    "task_linked_goal": 24,
+    "task_unlinked_goal": 25,
+    "goal_next_changed": 26,
+    "goal_focus_changed": 27,
     "plan_added": 1,
     "errand_added": 2,
     "todo_added": 3,
@@ -83,6 +95,18 @@ _SUMMARY_LABELS = {
     "recurrence_resumed": "恢复定期事项",
     "recurrence_stopped": "停止定期事项",
     "recurrence_deleted": "删除定期事项",
+    "goal_created": "新增目标",
+    "goal_updated": "更新目标",
+    "goal_paused": "暂停目标",
+    "goal_resumed": "恢复目标",
+    "goal_ended": "结束目标",
+    "phase_added": "新增阶段",
+    "phase_updated": "更新阶段",
+    "phase_order_changed": "调整阶段顺序",
+    "task_linked_goal": "关联目标事项",
+    "task_unlinked_goal": "解除目标事项",
+    "goal_next_changed": "更新下一步",
+    "goal_focus_changed": "更新当前阶段",
     "plan_added": "新增 Plan",
     "errand_added": "新增 Errand",
     "todo_added": "新增 To Do",
@@ -116,6 +140,8 @@ def build_agent_receipt(before: Context, after: Context) -> dict[str, Any]:
     after_errands = _errand_states(after)
     before_recurrences = _recurrence_states(before)
     after_recurrences = _recurrence_states(after)
+    before_goals = _goal_rows(before)
+    after_goals = _goal_rows(after)
 
     changes: list[dict[str, Any]] = []
     for task_id in sorted(set(before_tasks) | set(after_tasks)):
@@ -135,6 +161,9 @@ def build_agent_receipt(before: Context, after: Context) -> dict[str, Any]:
                 after_recurrences.get(series_id),
             )
         )
+
+    for goal_id in sorted(set(before_goals) | set(after_goals)):
+        changes.extend(_diff_goal(before_goals.get(goal_id), after_goals.get(goal_id)))
 
     changes.extend(_diff_orders(before, after))
     changes.sort(
@@ -248,6 +277,90 @@ def _recurrence_states(context: Context) -> dict[str, _RecurrenceState]:
             end_clock=_optional_text(row.get("defaultEndClock")),
         )
     return states
+
+
+def _goal_rows(context: Context) -> dict[str, Mapping[str, Any]]:
+    """Read only the canonical list, never the duplicated currentGoal context."""
+    return {
+        _required_id(row, "id"): row
+        for row in _rows(context, "goals")
+    }
+
+
+def _goal_tasks(goal: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
+    return {
+        _required_id(row, "taskId"): row
+        for row in _rows(goal, "tasks")
+    }
+
+
+def _goal_phases(goal: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
+    return {
+        _required_id(row, "id"): row
+        for row in _rows(goal, "phases")
+    }
+
+
+def _diff_goal(
+    old: Mapping[str, Any] | None, new: Mapping[str, Any] | None
+) -> list[dict[str, Any]]:
+    if old is None and new is not None:
+        return [_change("goal_created", "goal", _required_id(new, "id"), _text(new.get("title")))]
+    if old is None or new is None:
+        # Goals have no delete operation in this product version.
+        return []
+    goal_id = _required_id(new, "id")
+    title = _text(new.get("title"))
+    changes: list[dict[str, Any]] = []
+    if (
+        _text(old.get("title")), _optional_text(old.get("notes")),
+        _optional_text(old.get("horizonText")),
+    ) != (
+        title, _optional_text(new.get("notes")), _optional_text(new.get("horizonText")),
+    ):
+        changes.append(_change("goal_updated", "goal", goal_id, title))
+    if _text(old.get("state")) != _text(new.get("state")):
+        event = {"paused": "goal_paused", "active": "goal_resumed", "ended": "goal_ended"}.get(_text(new.get("state")))
+        if event:
+            changes.append(_change(event, "goal", goal_id, title))
+    if old.get("nextTaskId") != new.get("nextTaskId"):
+        changes.append(_change(
+            "goal_next_changed", "goal", goal_id, title,
+            before=old.get("nextTaskId"), after=new.get("nextTaskId"),
+        ))
+    if old.get("focusPhaseId") != new.get("focusPhaseId"):
+        changes.append(_change(
+            "goal_focus_changed", "goal", goal_id, title,
+            before=old.get("focusPhaseId"), after=new.get("focusPhaseId"),
+        ))
+
+    old_tasks, new_tasks = _goal_tasks(old), _goal_tasks(new)
+    for task_id in sorted(set(old_tasks) | set(new_tasks)):
+        old_task, new_task = old_tasks.get(task_id), new_tasks.get(task_id)
+        if old_task is None and new_task is not None:
+            changes.append(_change("task_linked_goal", "goal_task", task_id, _text(new_task.get("title")), goalId=goal_id))
+        elif old_task is not None and new_task is None:
+            changes.append(_change("task_unlinked_goal", "goal_task", task_id, _text(old_task.get("title")), goalId=goal_id))
+        elif old_task is not None and new_task is not None and old_task.get("phaseId") != new_task.get("phaseId"):
+            changes.append(_change("task_linked_goal", "goal_task", task_id, _text(new_task.get("title")), goalId=goal_id, beforePhaseId=old_task.get("phaseId"), afterPhaseId=new_task.get("phaseId")))
+
+    old_phases, new_phases = _goal_phases(old), _goal_phases(new)
+    for phase_id in sorted(set(old_phases) | set(new_phases)):
+        old_phase, new_phase = old_phases.get(phase_id), new_phases.get(phase_id)
+        if old_phase is None and new_phase is not None:
+            changes.append(_change("phase_added", "phase", phase_id, _text(new_phase.get("title")), goalId=goal_id))
+        elif old_phase is not None and new_phase is not None:
+            if (
+                _text(old_phase.get("title")), _optional_text(old_phase.get("notes")), _text(old_phase.get("status")),
+            ) != (
+                _text(new_phase.get("title")), _optional_text(new_phase.get("notes")), _text(new_phase.get("status")),
+            ):
+                changes.append(_change("phase_updated", "phase", phase_id, _text(new_phase.get("title")), goalId=goal_id))
+    old_order = [row_id for row_id, _ in sorted(old_phases.items(), key=lambda pair: int(pair[1].get("position", 0)))]
+    new_order = [row_id for row_id, _ in sorted(new_phases.items(), key=lambda pair: int(pair[1].get("position", 0)))]
+    if old_order != new_order and set(old_order) == set(new_order):
+        changes.append(_change("phase_order_changed", "goal", goal_id, title))
+    return changes
 
 
 def _diff_recurrence(

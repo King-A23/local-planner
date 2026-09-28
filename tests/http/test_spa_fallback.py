@@ -291,8 +291,8 @@ def test_v2_clocks_and_agent_panel_ui() -> None:
     assert 'type="range"' not in clock
     assert "SLOT_COUNT" not in clock
     assert "new Date(" not in clock
-    assert "目标日已过" in inventory
-    assert "目标日是今天" in inventory
+    assert "参考日已过" in inventory
+    assert "参考日是今天" in inventory
     assert "setTaskTarget" in inventory
     planning = (src / "DailyPlanningPage.tsx").read_text(encoding="utf-8")
     assert "AgentPanel" in app

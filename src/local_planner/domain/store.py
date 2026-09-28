@@ -8,6 +8,8 @@ from typing import Iterator, Protocol
 from local_planner.domain.errors import Conflict
 from local_planner.domain.models import (
     CalendarDate,
+    Goal,
+    GoalPhase,
     DayRecord,
     DayTaskEntry,
     Errand,
@@ -31,6 +33,24 @@ class UnitOfWork(Protocol):
     meta: MetaStore
 
     def transaction(self) -> Iterator[None]: ...
+
+    def get_goal(self, goal_id: str) -> Goal | None: ...
+
+    def list_goals(self) -> list[Goal]: ...
+
+    def save_goal(self, goal: Goal) -> None: ...
+
+    def get_phase(self, phase_id: str) -> GoalPhase | None: ...
+
+    def list_phases(self, goal_id: str) -> list[GoalPhase]: ...
+
+    def save_phase(self, phase: GoalPhase) -> None: ...
+
+    def list_goal_tasks(self, goal_id: str) -> list[Task]: ...
+
+    def get_goal_request(self, request_id: str) -> tuple[str, str] | None: ...
+
+    def save_goal_request(self, request_id: str, fingerprint: str, goal_id: str) -> None: ...
 
     def get_task(self, task_id: TaskId) -> Task | None: ...
 
@@ -104,6 +124,9 @@ class InMemoryUnitOfWork:
     """Process-local store for domain unit tests. Same port as persistence."""
 
     def __init__(self) -> None:
+        self._goals: dict[str, Goal] = {}
+        self._phases: dict[str, GoalPhase] = {}
+        self._goal_requests: dict[str, tuple[str, str]] = {}
         self._tasks: dict[TaskId, Task] = {}
         self._days: dict[CalendarDate, DayRecord] = {}
         self._entries: dict[tuple[CalendarDate, TaskId], DayTaskEntry] = {}
@@ -118,6 +141,33 @@ class InMemoryUnitOfWork:
     @contextmanager
     def transaction(self) -> Iterator[None]:
         yield
+
+    def get_goal(self, goal_id: str) -> Goal | None:
+        return self._goals.get(goal_id)
+
+    def list_goals(self) -> list[Goal]:
+        return sorted(self._goals.values(), key=lambda g: (g.created_at, g.id), reverse=True)
+
+    def save_goal(self, goal: Goal) -> None:
+        self._goals[goal.id] = goal
+
+    def get_phase(self, phase_id: str) -> GoalPhase | None:
+        return self._phases.get(phase_id)
+
+    def list_phases(self, goal_id: str) -> list[GoalPhase]:
+        return sorted((p for p in self._phases.values() if p.goal_id == goal_id), key=lambda p: (p.position, p.id))
+
+    def save_phase(self, phase: GoalPhase) -> None:
+        self._phases[phase.id] = phase
+
+    def list_goal_tasks(self, goal_id: str) -> list[Task]:
+        return sorted((t for t in self._tasks.values() if t.goal_id == goal_id and t.discarded_at is None), key=lambda t: (t.created_at, t.id))
+
+    def get_goal_request(self, request_id: str) -> tuple[str, str] | None:
+        return self._goal_requests.get(request_id)
+
+    def save_goal_request(self, request_id: str, fingerprint: str, goal_id: str) -> None:
+        self._goal_requests[request_id] = (fingerprint, goal_id)
 
     def get_task(self, task_id: TaskId) -> Task | None:
         return self._tasks.get(task_id)

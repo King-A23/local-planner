@@ -77,6 +77,8 @@ class Task:
     series_id: Optional[str] = None
     occurrence_date: Optional[CalendarDate] = None
     notes: str = ""
+    goal_id: str | None = None
+    phase_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -93,6 +95,10 @@ class DayTaskEntry:
     series_id: Optional[str] = None
     occurrence_date: Optional[CalendarDate] = None
     notes_snapshot: str = ""
+    goal_id_snapshot: str | None = None
+    goal_title_snapshot: str | None = None
+    phase_id_snapshot: str | None = None
+    phase_title_snapshot: str | None = None
 
 
 @dataclass(frozen=True)
@@ -194,3 +200,29 @@ def task_status(t: Task) -> TaskStatus:
 
 def is_writable(day: DayPlan, today: CalendarDate) -> bool:
     return day.date >= today and day.status == "open"
+
+
+@dataclass(frozen=True)
+class Goal:
+    id: str
+    title: str
+    notes: str
+    horizon_text: str
+    state: Literal["active", "paused", "ended"]
+    end_reason: Literal["achieved", "abandoned"] | None
+    next_task_id: str | None
+    focus_phase_id: str | None
+    revision: int
+    created_at: str
+    updated_at: str
+    ended_at: str | None = None
+
+
+@dataclass(frozen=True)
+class GoalPhase:
+    id: str
+    goal_id: str
+    title: str
+    notes: str
+    position: int
+    status: Literal["open", "done", "skipped"] = "open"

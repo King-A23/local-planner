@@ -18,9 +18,10 @@ from local_planner.cli.parser import build_domain_parser
 from local_planner.domain import commands as cmds
 from local_planner.domain.commands import UNSET
 from local_planner.domain.recurrence import UNSET as RECURRENCE_UNSET
-from local_planner.domain.errors import DaySealed, DomainError
+from local_planner.domain.errors import DaySealed, DomainError, NotFound
 from local_planner.domain.models import add_calendar_days, parse_calendar_date
 from local_planner.domain.search import search_items
+from local_planner.domain import goals
 from local_planner.agent_contract import capabilities_payload
 from local_planner.paths import data_dir, db_path, resolve_clock
 from local_planner.present import (
@@ -54,6 +55,23 @@ def _weekdays(value: str | None) -> list[str] | None:
     if value is None:
         return None
     return [part.strip() for part in value.split(",") if part.strip()]
+
+
+def _generation(value: str) -> str | None:
+    return None if value == "none" else value
+
+
+def _require_generation(uow: Any, value: str) -> None:
+    """Reject a goal write based on a context from before backup recovery."""
+    if _generation(value) != uow.meta.get("recovery_generation"):
+        raise Conflict("数据已恢复，请重新读取上下文后再修改目标")
+
+
+def _goal_result(uow: Any, goal: Any, today: str) -> dict[str, Any]:
+    return goals.goal_payload(uow, goal) | {
+        "serverToday": today,
+        "recoveryGeneration": uow.meta.get("recovery_generation"),
+    }
 
 
 def _human_line(command: str, today: str, data: dict[str, Any]) -> str:
@@ -90,6 +108,88 @@ def _run(args: Any, today: str, clock: Any, uow: Any) -> dict[str, Any]:
         return search_items(clock, uow, args.query)
     if command == "context":
         return context_payload(clock, uow, today)
+    if command == "goal.list":
+        return {
+            "items": goals.list_goal_payloads(uow),
+            "serverToday": today,
+            "recoveryGeneration": uow.meta.get("recovery_generation"),
+        }
+    if command == "goal.show":
+        goal = uow.get_goal(args.goal_id)
+        if goal is None:
+            raise NotFound("找不到目标")
+        return _goal_result(uow, goal, today)
+    if command == "goal.create":
+        _require_generation(uow, args.recovery_generation)
+        return _goal_result(
+            uow,
+            goals.create_goal(
+                clock,
+                uow,
+                args.title,
+                notes=args.notes,
+                horizon_text=args.horizon_text,
+                request_id=args.request_id,
+            ),
+            today,
+        )
+    if command.startswith("goal."):
+        _require_generation(uow, args.recovery_generation)
+        operation: str
+        values: dict[str, Any]
+        if command == "goal.edit":
+            operation, values = "edit", {
+                "title": args.title, "notes": args.notes,
+                "horizon_text": args.horizon_text,
+            }
+        elif command == "goal.state":
+            operation, values = "state", {
+                "state": args.state, "end_reason": args.end_reason,
+            }
+        elif command == "goal.add-task":
+            operation, values = "add-task", {
+                "title": args.title, "notes": args.notes,
+                "phase_id": args.phase_id, "request_id": args.request_id,
+            }
+        elif command == "goal.link-task":
+            operation, values = "link-task", {
+                "task_id": args.task_id, "phase_id": args.phase_id,
+                "expected_goal_id": _generation(args.expected_goal_id),
+            }
+        elif command == "goal.unlink-task":
+            operation, values = "unlink-task", {"task_id": args.task_id}
+        elif command == "goal.next":
+            operation, values = "next", {"task_id": _generation(args.task_id)}
+        elif command == "goal.schedule-next":
+            operation, values = "schedule-next", {
+                "expected_task_id": args.expected_task_id,
+                "expected_scheduled_date": _generation(args.expected_scheduled_date),
+            }
+        elif command == "goal.phase.add":
+            operation, values = "add-phase", {
+                "title": args.title, "notes": args.notes, "request_id": args.request_id,
+            }
+        elif command == "goal.phase.edit":
+            operation, values = "edit-phase", {
+                "phase_id": args.phase_id, "title": args.title,
+                "notes": args.notes, "status": args.status,
+            }
+        elif command == "goal.phase.focus":
+            operation, values = "focus-phase", {
+                "phase_id": _generation(args.phase_id),
+            }
+        elif command == "goal.phase.reorder":
+            operation, values = "reorder-phases", {"phase_ids": args.phase_ids}
+        else:
+            raise UsageError("未知目标命令", command=command)
+        return _goal_result(
+            uow,
+            goals.change_goal(
+                clock, uow, args.goal_id, operation,
+                expected_revision=args.expected_revision, **values,
+            ),
+            today,
+        )
     if command == "calendar":
         return calendar_payload(
             uow, _resolve_date(args.date_from, today), _resolve_date(args.date_to, today), today

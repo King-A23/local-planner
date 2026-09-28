@@ -36,17 +36,22 @@ def open_connection(path: str | Path) -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA busy_timeout = 5000")
-    apply_migrations(conn, data_dir=db_path.parent)
-    _seed_timezone(conn)
-    _require_integrity(conn)
-    return conn
+    try:
+        apply_migrations(conn, data_dir=db_path.parent)
+        _seed_timezone(conn)
+        _require_integrity(conn)
+        return conn
+    except Exception:
+        conn.close()
+        raise
 
 
 def apply_migrations(conn: sqlite3.Connection, data_dir: Path) -> None:
     """Apply numbered 00N_*.sql files; version truth is schema_migrations only."""
-    applied = _applied_versions(conn)
+    migrations = _migration_files()
+    applied = _applied_versions(conn, [version for version, _ in migrations])
     existing_database = bool(applied)
-    for version, sql_path in _migration_files():
+    for version, sql_path in migrations:
         if version in applied:
             continue
         if existing_database:
@@ -199,13 +204,32 @@ def _migration_files() -> list[tuple[int, Path]]:
     return found
 
 
-def _applied_versions(conn: sqlite3.Connection) -> set[int]:
+def _applied_versions(
+    conn: sqlite3.Connection, known_versions: list[int] | None = None
+) -> set[int]:
+    """Return a verified, prefix-shaped schema migration history.
+
+    A newer application may migrate an older database, but an older application
+    must never open a database that already contains a migration it does not
+    know.  Checking this before any backup, DDL, or meta write keeps a failed
+    downgrade attempt read-only.
+    """
     row = conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'"
     ).fetchone()
     if row is None:
         return set()
-    return {int(r[0]) for r in conn.execute("SELECT version FROM schema_migrations")}
+    versions = [int(r[0]) for r in conn.execute("SELECT version FROM schema_migrations ORDER BY version")]
+    if not versions:
+        raise sqlite3.DatabaseError("数据库迁移记录不完整，无法安全打开")
+    expected = known_versions
+    if expected is None:
+        expected = [version for version, _ in _migration_files()]
+    if versions != expected[: len(versions)]:
+        raise sqlite3.DatabaseError(
+            "数据库版本不兼容，请使用创建它的较新版本 Local Planner"
+        )
+    return set(versions)
 
 
 def copy_sqlite(source_conn: sqlite3.Connection, dest: Path) -> None:

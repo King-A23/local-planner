@@ -30,7 +30,7 @@ function candidateGroups(planning: TodayPlanning): CandidateGroup[] {
     {
       key: "due",
       title: "到期 / 已过期",
-      description: "目标日期已到的待办，需要你选入今天。",
+      description: "参考日期已到的待办，需要你选入今天。",
       items: planning.due,
     },
     {

@@ -25,7 +25,7 @@ from local_planner.domain.ordering import ordered_items
 def day_plan_payload(plan: DayPlan, today: str) -> dict[str, Any]:
     todos = ordered_items(plan.todos, manual=plan.manual_todo_order)
     errands = ordered_items(plan.errands, manual=plan.manual_errand_order)
-    return {
+    payload = {
         "date": plan.date,
         "manualTodoOrder": plan.manual_todo_order,
         "manualErrandOrder": plan.manual_errand_order,
@@ -46,6 +46,10 @@ def day_plan_payload(plan: DayPlan, today: str) -> dict[str, Any]:
                 "endClock": item.end_clock,
                 "seriesId": item.series_id,
                 "occurrenceDate": item.occurrence_date,
+                "goalId": item.goal_id_snapshot,
+                "goalTitle": item.goal_title_snapshot,
+                "phaseId": item.phase_id_snapshot,
+                "phaseTitle": item.phase_title_snapshot,
                 "recurrence": _recurrence_origin(
                     item.series_id, item.occurrence_date
                 ),
@@ -70,10 +74,29 @@ def day_plan_payload(plan: DayPlan, today: str) -> dict[str, Any]:
             for item in errands
         ],
     }
+    return payload
 
 
-def inventory_item_payload(item: InventoryItem) -> dict[str, Any]:
-    return {
+def _goal_labels(
+    uow: UnitOfWork | None, goal_id: str | None, phase_id: str | None
+) -> tuple[str | None, str | None]:
+    if uow is None or goal_id is None:
+        return None, None
+    goal = uow.get_goal(goal_id)
+    phase = uow.get_phase(phase_id) if phase_id is not None else None
+    return (
+        goal.title if goal is not None else None,
+        phase.title if phase is not None and phase.goal_id == goal_id else None,
+    )
+
+
+def inventory_item_payload(
+    item: InventoryItem, uow: UnitOfWork | None = None
+) -> dict[str, Any]:
+    goal_title, phase_title = _goal_labels(
+        uow, item.task.goal_id, item.task.phase_id
+    )
+    payload = {
         "taskId": item.task.id,
         "title": item.task.title,
         "notes": item.task.notes,
@@ -81,10 +104,15 @@ def inventory_item_payload(item: InventoryItem) -> dict[str, Any]:
         "targetDate": item.task.target_date,
         "seriesId": item.task.series_id,
         "occurrenceDate": item.task.occurrence_date,
+        "goalId": item.task.goal_id,
+        "goalTitle": goal_title,
+        "phaseId": item.task.phase_id,
+        "phaseTitle": phase_title,
         "recurrence": _recurrence_origin(
             item.task.series_id, item.task.occurrence_date
         ),
     }
+    return payload
 
 
 def _recurrence_origin(
@@ -199,8 +227,17 @@ def planning_payload(view: PlanningView, today: str) -> dict[str, Any]:
     }
 
 
-def context_payload(clock: Clock, uow: UnitOfWork, today: str) -> dict[str, Any]:
+def context_payload(
+    clock: Clock,
+    uow: UnitOfWork,
+    today: str,
+    *,
+    surface: str = "today",
+    goal_id: str | None = None,
+) -> dict[str, Any]:
     from local_planner.domain import commands as cmds
+    from local_planner.domain import goals
+    from local_planner.domain.errors import NotFound
 
     plan = cmds.open_day(clock, uow, today)
     day = day_plan_payload(plan, today)
@@ -211,6 +248,10 @@ def context_payload(clock: Clock, uow: UnitOfWork, today: str) -> dict[str, Any]
             "title": task.title,
             "notes": task.notes,
             "date": task.current_scheduled_date,
+            "goalId": task.goal_id,
+            "phaseId": task.phase_id,
+            "goalTitle": _goal_labels(uow, task.goal_id, task.phase_id)[0],
+            "phaseTitle": _goal_labels(uow, task.goal_id, task.phase_id)[1],
         }
         for task in uow.list_scheduled_after(today)
     ]
@@ -233,7 +274,7 @@ def context_payload(clock: Clock, uow: UnitOfWork, today: str) -> dict[str, Any]
         manual_todo_order=record.manual_todo_order,
         manual_errand_order=record.manual_errand_order,
     ), today) for record in uow.list_days_after(today)]
-    return {
+    payload = {
         "today": today,
         "timezone": "Asia/Shanghai",
         "capabilities": capabilities_payload(),
@@ -245,11 +286,27 @@ def context_payload(clock: Clock, uow: UnitOfWork, today: str) -> dict[str, Any]
         "inventoryCount": len(inventory),
         "todos": day["todos"],
         "errands": day["errands"],
-        "inventory": [inventory_item_payload(item) for item in inventory],
+        "inventory": [inventory_item_payload(item, uow) for item in inventory],
         "scheduledAhead": ahead,
         "errandsAhead": errands_ahead,
         "daysAhead": days_ahead,
         "recurrences": [
             recurrence_payload(item, today) for item in uow.list_recurrences()
         ],
+        "goals": goals.list_goal_payloads(uow),
+        "recoveryGeneration": uow.meta.get("recovery_generation"),
+        "agentSurface": surface,
     }
+    if surface == "goal":
+        if goal_id is None:
+            raise NotFound("目标页面缺少目标 ID")
+        goal = uow.get_goal(goal_id)
+        if goal is None:
+            raise NotFound("找不到目标")
+        payload["goalId"] = goal_id
+        payload["currentGoal"] = goals.goal_payload(uow, goal)
+    elif goal_id is not None:
+        # A goal ID has meaning only for the goal surface.  Keep malformed
+        # callers from silently making the ordinary today context authoritative.
+        raise ValidationError("当前页面不支持目标 ID")
+    return payload

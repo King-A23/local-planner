@@ -6,4 +6,5 @@ export const ASSISTANT_EXAMPLES = [
   "把「任务名称」排到今天计划的第一项",
   "今天计划恢复按时间排序",
   "每周五安排「任务名称」",
+  "新建目标「通过 CCF CSP 认证」，下一步是完成一套真题",
 ] as const;

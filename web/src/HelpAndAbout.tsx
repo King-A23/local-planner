@@ -13,13 +13,13 @@ export function CommonShortcuts({ className = "settings-keyboard-list" }: { clas
     <div><dt>关闭当前菜单或窗口</dt><dd><kbd>Esc</kbd></dd></div>
     <div><dt>快速新增事项</dt><dd><kbd>⌘ / Ctrl + N</kbd></dd></div>
     <div><dt>打开设置（桌面版）</dt><dd><kbd>⌘ ,</kbd></dd></div>
-    <div><dt>今天 / 待办 / 定期事项（桌面版）</dt><dd><kbd>⌘ 1 / 2 / 3</kbd></dd></div>
+    <div><dt>今天 / 待办 / 定期事项 / 目标（桌面版）</dt><dd><kbd>⌘ 1 / 2 / 3 / 4</kbd></dd></div>
   </dl>;
 }
 
 export function AssistantUsage() {
   return <>
-    <p>可添加事项、搜索标题和备注、修改详情、改期、移回待办、完成或恢复、调整顺序，也能设置时间、目标日期和定期事项。</p>
+    <p>可添加事项、搜索标题和备注、修改详情、改期、移回待办、完成或恢复、调整顺序，也能设置时间、参考日期、定期事项和目标行动。</p>
     <ul>{ASSISTANT_EXAMPLES.map((example) => <li key={example}>“{example}”</li>)}</ul>
     <p className="settings-caption">标题重复时请带上日期。过去的记录只读，零碎事项不能跨日移动。完成区的展开和折叠由你在界面操作。助手的询问和说明会直接显示在回执中；需要澄清时，补全原指令后重新发送，并核对返回的改动。</p>
   </>;
@@ -51,11 +51,17 @@ export function UsageGuide() {
     <details className="settings-details"><summary>待办、零碎事项与定期事项</summary>
       <dl>
         <dt>计划 · 当天要推进的事</dt><dd>未完成的计划第二天回到「待办」，由你决定何时再做。</dd>
-        <dt>待办 · 以后再做的事</dt><dd>目标日期只是参考，不会自动安排。菜单中「标记已完成」会记入今天的完成记录。</dd>
+        <dt>待办 · 以后再做的事</dt><dd>参考日期只是提示，不会自动安排。菜单中「标记已完成」会记入今天的完成记录。</dd>
         <dt>零碎事项 · 只属于当天的小事</dt><dd>不会带到明天，未完成事项留在当天历史中，显示为已作废。</dd>
         <dt>定期事项 · 每天或每周重复的事</dt><dd>勾选一次只完成当天事项。暂停后不生成新事项，可恢复；停止后不能恢复。</dd>
       </dl>
-      <p className="settings-caption">日期按北京时间（Asia/Shanghai）计算。目标日期与计划日期不同，过去的日期只读。</p>
+      <p className="settings-caption">日期按北京时间（Asia/Shanghai）计算。参考日期与计划日期不同，过去的日期只读。</p>
+    </details>
+
+    <details className="settings-details"><summary>目标与阶段</summary>
+      <p>「目标」适合记录需要一段时间完成的方向，例如通过认证或整理作品集。写下目标后，再从行动中选一件「下一步」。</p>
+      <p>阶段是可选的扁平标签，可排序、设为当前、完成、跳过或重新打开。它不会自动完成、删除或改期其中的行动。</p>
+      <p>暂停或结束目标不会改动已有待办和今天的安排。结束后仍可重新打开；大致时间只作参考。</p>
     </details>
 
     <details className="settings-details"><summary>使用计划助手</summary>

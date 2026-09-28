@@ -9,6 +9,7 @@ import { META_POLL_MS } from "./constants";
 import { DailyPlanningPage } from "./DailyPlanningPage";
 import { DayView } from "./DayView";
 import { InventoryPage } from "./InventoryPage";
+import { GoalDetailPage, GoalsPage } from "./GoalsPage";
 import { RecurrencesPage } from "./RecurrencesPage";
 import { handleNavClick, navigate, parseRoute } from "./route";
 import { Shell } from "./Shell";
@@ -41,6 +42,8 @@ export function App() {
   });
   const [agentStatus, setAgentStatus] = useState<string | null>(null);
   const [agentRunTick, setAgentRunTick] = useState(0);
+  const [goalRecoveryGeneration, setGoalRecoveryGeneration] = useState<string | null>(null);
+  const [goalContextReady, setGoalContextReady] = useState(false);
   const agentTriggerRef = useRef<HTMLElement | null>(null);
 
   const openAgent = useCallback((trigger: HTMLButtonElement) => {
@@ -79,18 +82,28 @@ export function App() {
       ? "todo"
       : route.kind === "day"
         ? "day"
-        : "today";
+        : route.kind === "goals"
+          ? "goals"
+          : route.kind === "goal"
+            ? "goal"
+            : "today";
   const agentDate = route.kind === "day" ? route.date : null;
+  const agentGoalId = route.kind === "goal" ? route.id : null;
   const activeSection =
     route.kind === "settings" ? "settings" : route.kind === "inventory"
       ? "inventory"
       : route.kind === "recurrences"
         ? "recurrences"
+        : route.kind === "goals" || route.kind === "goal"
+          ? "goals"
         : route.kind === "notfound"
           ? undefined
           : "today";
 
   const refreshAll = useCallback(() => { setAgentRunTick((tick) => tick + 1); refreshMeta(); }, [refreshMeta]);
+  useEffect(() => {
+    setGoalContextReady(false);
+  }, [route.kind, route.kind === "goal" ? route.id : ""]);
   useEffect(() => {
     window.addEventListener("planner:restored", refreshAll);
     window.addEventListener("planner:items-changed", refreshAll);
@@ -156,6 +169,10 @@ export function App() {
         </>
       );
     }
+  } else if (route.kind === "goals") {
+    body = <GoalsPage onChange={refreshAll} onRecoveryGeneration={(generation) => { setGoalRecoveryGeneration(generation); setGoalContextReady(true); }} refreshToken={agentRunTick} />;
+  } else if (route.kind === "goal") {
+    body = <GoalDetailPage key={route.id} id={route.id} onChange={refreshAll} onRecoveryGeneration={(generation) => { setGoalRecoveryGeneration(generation); setGoalContextReady(true); }} refreshToken={agentRunTick} />;
   } else if (route.kind === "todayPlanning") {
     body = (
       <DailyPlanningPage
@@ -249,6 +266,9 @@ export function App() {
         triggerRef={agentTriggerRef}
         surface={agentSurface}
         date={agentDate}
+        goalId={agentGoalId}
+        recoveryGeneration={goalRecoveryGeneration}
+        contextReady={agentSurface !== "goals" && agentSurface !== "goal" || goalContextReady}
         onRan={() => {
           setAgentRunTick((tick) => tick + 1);
           refreshMeta();

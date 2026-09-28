@@ -14,7 +14,7 @@ type Receipt = {
 };
 type Run = {
   id: string; requestId: string; launcherId: string; prompt: string;
-  status: string; elapsedSeconds: number; surface: "today" | "todo" | "day"; date: string | null;
+  status: string; elapsedSeconds: number; surface: "today" | "todo" | "day" | "goals" | "goal"; date: string | null; goalId?: string | null; recoveryGeneration?: string | null;
   result: { ok: boolean; message?: string; stdout?: string; stderr?: string; receipt?: Receipt } | null;
 };
 const ACTIVE = new Set(["starting", "running", "paused", "stopping"]);
@@ -40,9 +40,9 @@ async function request<T>(url: string, body?: unknown): Promise<T> {
   return data as T;
 }
 
-export function AgentPanel({ open, onClose, onOpen, triggerRef, surface, date, onRan, onStatusChange }: {
+export function AgentPanel({ open, onClose, onOpen, triggerRef, surface, date, goalId, recoveryGeneration, contextReady, onRan, onStatusChange }: {
   open: boolean; onClose: () => void; onOpen?: () => void; triggerRef: RefObject<HTMLElement | null>;
-  surface: "today" | "todo" | "day"; date: string | null; onRan?: () => void; onStatusChange?: (status: string | null) => void;
+  surface: "today" | "todo" | "day" | "goals" | "goal"; date: string | null; goalId: string | null; recoveryGeneration: string | null; contextReady: boolean; onRan?: () => void; onStatusChange?: (status: string | null) => void;
 }) {
   const [items, setItems] = useState<Launcher[]>([]);
   const [selected, setSelected] = useState(() => readPreference(SELECTION_KEY));
@@ -152,10 +152,13 @@ export function AgentPanel({ open, onClose, onOpen, triggerRef, surface, date, o
     try { await work(); } catch (err) { setError(errorMessage(err)); }
     finally { actionRef.current = false; setPending(false); }
   }
-  async function submitPrompt(launcherId = selected, context = { surface, date }) {
+  async function submitPrompt(launcherId = selected, context = {
+    surface, date, goalId,
+    ...((surface === "goals" || surface === "goal") ? { recoveryGeneration } : {}),
+  }) {
     const text = prompt.trim();
     if (!text || !launcherId) return;
-    const key = JSON.stringify([launcherId, text, context.surface, context.date]);
+    const key = JSON.stringify([launcherId, text, context.surface, context.date, context.goalId, context.recoveryGeneration]);
     if (requestRef.current?.key !== key) requestRef.current = { key, id: crypto.randomUUID() };
     const next = await request<Run>("/api/agent-runs", {
       launcherId, requestId: requestRef.current.id, prompt: text, ...context,
@@ -166,7 +169,7 @@ export function AgentPanel({ open, onClose, onOpen, triggerRef, surface, date, o
     setShowMenu(false);
   }
   function send() {
-    if (!active && synced && !blocked && !checking) void perform(() => submitPrompt());
+    if (!active && synced && contextReady && !blocked && !checking) void perform(() => submitPrompt());
   }
   function control(action: "pause" | "resume" | "stop") {
     if (!run) return;
@@ -194,7 +197,10 @@ export function AgentPanel({ open, onClose, onOpen, triggerRef, surface, date, o
       }
       if (!finished) throw new Error("旧执行仍在收尾。新指令已保留，待停止后再发送。");
       onRanRef.current?.();
-      await submitPrompt(run.launcherId, { surface: run.surface, date: run.date });
+      await submitPrompt(run.launcherId, {
+        surface: run.surface, date: run.date, goalId: run.goalId ?? null,
+        ...((run.surface === "goals" || run.surface === "goal") ? { recoveryGeneration: run.recoveryGeneration ?? null } : {}),
+      });
     });
   }
 
@@ -203,7 +209,7 @@ export function AgentPanel({ open, onClose, onOpen, triggerRef, surface, date, o
   const output = [result?.stdout, result?.stderr].filter(Boolean).join("\n").trim();
   // Final model replies include clarifications and limitations absent from the
   // database diff. Keep them visible; the raw transcript stays in the details.
-  const reply = result?.stdout?.replace(/^\s*[-*]?\s*`?(?:PROCESS_CLEANUP_COMPLETE|INTENTIONAL_BACKGROUND_PROCESS_RETAINED|PROCESS_CLEANUP_BLOCKED)`?\s*$/gm, "").replace(/`?(?:PROCESS_CLEANUP_COMPLETE|INTENTIONAL_BACKGROUND_PROCESS_RETAINED|PROCESS_CLEANUP_BLOCKED)`?/g, "").trim();
+  const reply = result?.stdout?.replace(/(?:[`*_]\s*)?(?:PROCESS_CLEANUP_COMPLETE|INTENTIONAL_BACKGROUND_PROCESS_RETAINED|PROCESS_CLEANUP_BLOCKED)(?:\s*[`*_])?/g, "").replace(/\n{3,}/g, "\n\n").trim();
   const status = run?.status === "succeeded" && !result?.receipt?.changed && reply
     ? "助手已回复" : run ? STATUSES[run.status] ?? run.status : "";
 
@@ -272,7 +278,7 @@ export function AgentPanel({ open, onClose, onOpen, triggerRef, surface, date, o
           </div>
           {!active && <button type="submit" className="agent-pill-control agent-pill-btn-send"
             aria-label={checking ? "检测中…" : pending ? "正在提交…" : "发送指令"} title={`发送指令（${sendLabel}）`}
-            disabled={!synced || pending || checking || Boolean(blocked) || !selected || !prompt.trim()}>
+            disabled={!synced || !contextReady || pending || checking || Boolean(blocked) || !selected || !prompt.trim()}>
             {checking || pending ? <span className="agent-pill-spinner" aria-hidden="true" /> : <span aria-hidden="true">↑</span>}
           </button>}
         </form>
@@ -286,7 +292,10 @@ const CHANGE_LABELS: Record<string, string> = {
   recurrence_resumed: "恢复定期事项", recurrence_stopped: "停止定期事项", recurrence_deleted: "删除定期事项",
   plan_added: "新增计划", errand_added: "新增零碎事项", todo_added: "新增待办", todo_to_today: "加入今天",
   todo_scheduled: "安排到某天", moved_to_todo: "移回待办", rescheduled: "调整安排", completed: "完成",
-  notes_changed: "更新备注", order_changed: "调整排序", completion_undone: "取消完成", renamed: "更新标题", clock_changed: "更新时间", target_date_changed: "更新目标日期", deleted: "删除",
+  notes_changed: "更新备注", order_changed: "调整排序", completion_undone: "取消完成", renamed: "更新标题", clock_changed: "更新时间", target_date_changed: "更新参考日期", deleted: "删除",
+  goal_created: "新建目标", goal_updated: "更新目标", goal_paused: "暂停目标", goal_resumed: "恢复目标", goal_ended: "结束目标",
+  phase_added: "添加阶段", phase_updated: "更新阶段", phase_order_changed: "调整阶段顺序", task_linked_goal: "关联行动", task_unlinked_goal: "解除行动关联",
+  goal_next_changed: "更新下一步", goal_focus_changed: "更新当前阶段",
 };
 function AgentChangeReceipt({ receipt }: { receipt: Receipt }) {
   return <section className="agent-receipt" aria-label="计划改动">

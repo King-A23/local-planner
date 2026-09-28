@@ -17,7 +17,7 @@ function ItemOptions({ options, close }: { options: Options; close: () => void }
   const [error, setError] = useState("");
   const errorRef = useRef<HTMLParagraphElement>(null);
   useEffect(() => { if (error) errorRef.current?.focus(); }, [error]);
-  const label = options.kind === "time" ? "设置时间" : options.kind === "target" ? "目标日期" : "安排到日期";
+  const label = options.kind === "time" ? "设置时间" : options.kind === "target" ? "参考日期" : "安排到日期";
   return <Modal label={label} className="item-options" onClose={() => { if (!saving.current) close(); }}>
     <form onSubmit={async (event) => {
       event.preventDefault();

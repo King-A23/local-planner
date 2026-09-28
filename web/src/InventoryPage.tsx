@@ -17,6 +17,7 @@ import { ItemRow } from "./ItemActions";
 import { useItemOptions } from "./ItemOptions";
 import { useQuickAdd } from "./useQuickAdd";
 import { addCivilDays, maxWritableDate } from "./dates";
+import { handleNavClick } from "./route";
 
 type InventoryPageProps = {
   today: string;
@@ -53,10 +54,10 @@ export function InventoryPage({
       return null;
     }
     if (target < today) {
-      return "目标日已过";
+      return "参考日已过";
     }
     if (target === today) {
-      return "目标日是今天";
+      return "参考日是今天";
     }
     return null;
   }
@@ -138,7 +139,7 @@ export function InventoryPage({
               { label: "安排到今天", separator: true, run: () => void mutate(() => scheduleTask(item.taskId, today)) },
               { label: "安排到明天", run: () => void mutate(() => scheduleTask(item.taskId, addCivilDays(today, 1))) },
               { label: "选择日期…", run: () => options.show({ title: item.title, kind: "date", date: today, min: today, max: maxDate, save: (values) => scheduleTask(item.taskId, values.date) }) },
-              { label: "目标日期…", separator: true, run: () => options.show({ title: item.title, kind: "target", date: item.targetDate ?? "", save: (values) => setTaskTarget(item.taskId, values.date || null) }) },
+              { label: "参考日期…", separator: true, run: () => options.show({ title: item.title, kind: "target", date: item.targetDate ?? "", save: (values) => setTaskTarget(item.taskId, values.date || null) }) },
               { label: "删除", separator: true, danger: true, run: () => void mutate(() => deleteTask(item.taskId)) },
             ]}>
               <button type="button" className="title" onClick={() => openItemEditor({ id: item.taskId, kind: "task", title: item.title, notes: item.notes, writable: true })}>{item.title}<NotesMark notes={item.notes} /></button>
@@ -148,7 +149,8 @@ export function InventoryPage({
               {item.recurrence ? (
                 <span className="badge recurrence-badge">来自定期事项</span>
               ) : null}
-              {item.targetDate ? <span className="task-clock-summary">目标：{item.targetDate}</span> : null}
+              {item.goalId && item.goalTitle ? <a className="goal-context-link" href={`/goals/${item.goalId}`} onClick={(event) => handleNavClick(event, `/goals/${item.goalId}`)}>目标：{item.goalTitle}{item.phaseTitle ? ` · ${item.phaseTitle}` : ""}</a> : null}
+              {item.targetDate ? <span className="task-clock-summary">参考：{item.targetDate}</span> : null}
                 <button
                   type="button"
                   className="linkish quiet"
@@ -181,7 +183,7 @@ export function InventoryPage({
             />
           </label>
           <label className="inventory-date-field">
-            <span className="visually-hidden">目标日期（可选，不会自动排入当天）</span>
+            <span className="visually-hidden">参考日期（可选，不会自动排入当天）</span>
             <span className="inventory-date-value" aria-hidden="true">
               {formatChineseDate(draftDate)}
             </span>
@@ -206,7 +208,7 @@ export function InventoryPage({
               lang="zh-CN"
               value={draftDate}
               onChange={(event) => setDraftDate(event.target.value)}
-              aria-label="目标日期（可选，不会自动排入当天）"
+              aria-label="参考日期（可选，不会自动排入当天）"
             />
           </label>
           <button

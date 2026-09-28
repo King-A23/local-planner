@@ -9,6 +9,7 @@ from datetime import date
 
 from local_planner.clock import Clock, SystemClock, format_utc
 from local_planner.domain.errors import Conflict, DaySealed, NotFound, ValidationError
+from local_planner.domain.goals import snapshot_fields, task_changed
 from local_planner.domain.time import validate_clock_pair
 from local_planner.domain.ordering import ordered_items
 from local_planner.domain.models import (
@@ -100,7 +101,7 @@ def ensure_open_day(uow: UnitOfWork, d: CalendarDate) -> None:
 
 def _require_task(uow: UnitOfWork, task_id: TaskId) -> Task:
     task = uow.get_task(task_id)
-    if task is None:
+    if task is None or task.discarded_at is not None:
         raise NotFound("找不到该任务")
     return task
 
@@ -250,8 +251,10 @@ def schedule_to_date(
                 end_clock=previous_entry.end_clock if previous_entry else None,
                 series_id=task.series_id,
                 occurrence_date=task.occurrence_date,
+                **snapshot_fields(uow, task),
             )
         )
+    task_changed(clock, uow, task, uow.get_task(task_id))
     return open_day(clock, uow, iso)
 
 
@@ -267,6 +270,7 @@ def unschedule(clock: Clock, uow: UnitOfWork, task_id: TaskId) -> InventoryItem:
     uow.delete_entry(current, task_id)
     updated = replace(task, current_scheduled_date=None)
     uow.save_task(updated)
+    task_changed(clock, uow, task, updated)
     return InventoryItem(task=updated)
 
 
@@ -303,6 +307,7 @@ def complete_task_on_day(
             completed_on_date=iso,
         )
     )
+    task_changed(clock, uow, task, uow.get_task(task_id))
     return open_day(clock, uow, iso)
 
 
@@ -327,6 +332,7 @@ def uncomplete_task_on_day(
             completed_on_date=None,
         )
     )
+    task_changed(clock, uow, task, uow.get_task(task_id))
     return open_day(clock, uow, iso)
 
 
@@ -400,6 +406,7 @@ def rename_task(
     title = normalize_title(title)
     updated = replace(task, title=title)
     uow.save_task(updated)
+    task_changed(clock, uow, task, updated)
     for entry in uow.list_entries_for_task(task_id):
         if _snapshot_is_sealed(clock, uow, entry.day_date):
             continue
@@ -431,6 +438,7 @@ def edit_details(
         raise Conflict("事项已在别处修改。请保留草稿，关闭后重新打开核对。")
     updated = replace(task, title=title, notes=notes)
     uow.save_task(updated)
+    task_changed(clock, uow, task, updated)
     for entry in uow.list_entries_for_task(item_id):
         if not _snapshot_is_sealed(clock, uow, entry.day_date):
             uow.save_entry(replace(entry, title_snapshot=title, notes_snapshot=notes))
@@ -444,6 +452,7 @@ def delete_task(clock: Clock, uow: UnitOfWork, task_id: TaskId) -> None:
     entries = uow.list_entries_for_task(task_id)
     in_todo = task.completed_at is None and task.current_scheduled_date is None
     if in_todo:
+        task_changed(clock, uow, task, None)
         for entry in entries:
             if not _snapshot_is_sealed(clock, uow, entry.day_date):
                 uow.delete_entry(entry.day_date, task_id)
@@ -456,6 +465,7 @@ def delete_task(clock: Clock, uow: UnitOfWork, task_id: TaskId) -> None:
     for entry in entries:
         if _snapshot_is_sealed(clock, uow, entry.day_date):
             raise Conflict("过去的某一天还记着它，不能删")
+    task_changed(clock, uow, task, None)
     for entry in entries:
         uow.delete_entry(entry.day_date, task_id)
     uow.delete_task_row(task_id)
@@ -557,6 +567,7 @@ def set_target_date(
         check_year_cap(iso, clock.today())
         updated = replace(task, target_date=iso)
     uow.save_task(updated)
+    task_changed(clock, uow, task, updated)
     if updated.current_scheduled_date:
         return open_day(clock, uow, updated.current_scheduled_date)
     return InventoryItem(task=updated)

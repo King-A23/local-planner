@@ -52,6 +52,9 @@ def test_schema_v1_tables_indexes_triggers_and_meta(uow: SqliteUnitOfWork) -> No
         "recurrence_series",
         "recurrence_occurrences",
         "day_planning",
+        "goals",
+        "goal_phases",
+        "goal_requests",
     } <= tables
     triggers = {
         row[0]
@@ -86,15 +89,28 @@ def test_schema_v1_tables_indexes_triggers_and_meta(uow: SqliteUnitOfWork) -> No
         "idx_entries_day",
         "idx_recurrence_series_state",
         "idx_recurrence_occurrence_entity",
+        "idx_goal_phases_goal",
+        "idx_tasks_goal",
     }
     assert uow.conn.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[
         0
-    ] == 7
+    ] == 8
     columns = {
         row[1]
         for row in uow.conn.execute("PRAGMA table_info(recurrence_series)")
     }
     assert "deleted_at" in columns
+    task_columns = {row[1] for row in uow.conn.execute("PRAGMA table_info(tasks)")}
+    assert {"goal_id", "phase_id"} <= task_columns
+    entry_columns = {
+        row[1] for row in uow.conn.execute("PRAGMA table_info(day_task_entries)")
+    }
+    assert {
+        "goal_id_snapshot",
+        "goal_title_snapshot",
+        "phase_id_snapshot",
+        "phase_title_snapshot",
+    } <= entry_columns
     assert (
         uow.conn.execute("SELECT value FROM meta WHERE key = 'timezone'").fetchone()[0]
         == "Asia/Shanghai"
@@ -256,7 +272,7 @@ def test_second_open_does_not_rerun_init(db_path: Path) -> None:
     try:
         assert second.conn.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[
             0
-        ] == 7
+        ] == 8
     finally:
         second.close()
 

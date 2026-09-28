@@ -7,10 +7,13 @@ export type Route =
   | { kind: "inventory" }
   | { kind: "settings" }
   | { kind: "recurrences" }
+  | { kind: "goals" }
+  | { kind: "goal"; id: string }
   | { kind: "todayPlanning" }
   | { kind: "notfound" };
 
 const DAY_PATH = /^\/d\/([^/]+)$/;
+const GOAL_PATH = /^\/goals\/([^/]+)$/;
 
 export function parseRoute(pathname: string): Route {
   if (pathname === "/" || pathname === "") {
@@ -23,6 +26,9 @@ export function parseRoute(pathname: string): Route {
   if (pathname === "/recurrences") {
     return { kind: "recurrences" };
   }
+  if (pathname === "/goals") return { kind: "goals" };
+  const goal = GOAL_PATH.exec(pathname);
+  if (goal) return { kind: "goal", id: decodeURIComponent(goal[1]) };
   if (pathname === "/planning/today") {
     return { kind: "todayPlanning" };
   }
