@@ -42,7 +42,7 @@ export function App() {
 
   const openAgent = useCallback((trigger: HTMLButtonElement) => {
     agentTriggerRef.current = trigger;
-    setAgentOpen(true);
+    setAgentOpen((open) => !open);
   }, []);
 
   const refreshMeta = useCallback(() => {

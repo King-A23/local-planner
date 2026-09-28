@@ -374,30 +374,6 @@ export function DayView({
       {error ? <p className="error">{error}</p> : null}
       {plan.isToday && <WelcomeTip />}
       {plan.isToday && planningStatus === "unplanned" && <div className="planning-shortcut"><button type="button" className="linkish quiet" onClick={onStartPlanning}>从待办中整理今天 →</button></div>}
-      {(() => {
-        const total = plan.todos.length + plan.errands.length;
-        if (total === 0) return null;
-        const done =
-          plan.todos.filter((t) => t.completedOnDay).length +
-          plan.errands.filter((e) => e.status === "completed").length;
-        const pct = Math.round((done / total) * 100);
-        return (
-          <div className="day-progress-card">
-            <div className="day-progress-header">
-              <span className="day-progress-title">完成进度</span>
-              <span className="day-progress-counter">
-                {done} / {total} 已完成 ({pct}%)
-              </span>
-            </div>
-            <div className="day-progress-track">
-              <div
-                className="day-progress-fill"
-                style={{ width: `${pct}%` }}
-              />
-            </div>
-          </div>
-        );
-      })()}
       <div className="day-columns">
         <section className="column">
           <div className="list-heading">

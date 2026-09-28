@@ -58,7 +58,7 @@ export function AgentPanel({ open, onClose, onOpen, triggerRef, surface, date, o
   const promptRef = useRef<HTMLTextAreaElement>(null);
   const composerRef = useRef<HTMLFormElement>(null);
   const keyboard = useRef(new ComposerKeyboard());
-  const { shortcut, sendLabel, newlineLabel } = useSendShortcut();
+  const { shortcut, sendLabel } = useSendShortcut();
   const actionRef = useRef(false);
   const requestRef = useRef<{ key: string; id: string } | null>(null);
   const notifiedRef = useRef("");
@@ -201,17 +201,12 @@ export function AgentPanel({ open, onClose, onOpen, triggerRef, surface, date, o
   const feedback = Boolean(run && (active || (result && dismissed !== run.id)));
   const output = [result?.stdout, result?.stderr].filter(Boolean).join("\n").trim();
   const status = run ? STATUSES[run.status] ?? run.status : "";
-  const location = surface === "todo" ? "待办" : surface === "day" ? date : "今天";
 
   return createPortal(
     <aside id="agent-panel" className="agent-drawer agent-dock-layer" aria-label="计划助手" hidden={!open}>
       <div className="agent-dock-wrapper">
-        <div className="agent-panel-heading">
-          <span>计划助手 <small>{active ? items.find((item) => item.id === run?.launcherId)?.name : `当前：${location}`}</small></span>
-          <button type="button" className="linkish quiet" onClick={onClose} aria-label="收起计划助手">收起</button>
-        </div>
         {!synced && <p className="agent-connection" role="status">正在重新连接助手，执行状态确认后可继续操作…</p>}
-        {!active && (blocked || !items.length) && <div className="agent-setup-hint"><span>{environment?.message ?? "连接一个助手，就能用一句话调整计划。"}</span><button type="button" onClick={() => { onClose(); navigate("/settings"); }}>连接助手</button></div>}
+        {!active && (blocked || !items.length) && <div className="agent-setup-hint"><span>{environment?.message ?? "连接一个助手，就能用一句话调整计划。"}</span><button type="button" onClick={() => { onClose(); navigate("/settings#assistant"); }}>连接助手</button></div>}
         {error && <p className="error agent-feedback" role="alert">{error}</p>}
         {feedback && run && <div className="agent-floating-receipt-card agent-run-card">
           <div className="agent-floating-receipt-header">
@@ -243,7 +238,7 @@ export function AgentPanel({ open, onClose, onOpen, triggerRef, surface, date, o
             disabled={active || pending} aria-label="指令示例" title="指令示例" aria-expanded={showMenu}
             onClick={() => setShowMenu((value) => !value)}>+</button>
           <textarea ref={promptRef} className="agent-pill-input" id="agent-prompt" aria-label={paused ? "调整执行指令" : "给计划助手的指令"}
-            aria-describedby="agent-input-hint" rows={1} value={prompt}
+            rows={1} value={prompt}
             disabled={pending || (active && !paused)} placeholder={items.length ? "写下要助手做的事…" : "请先配置计划助手"}
             onFocus={onOpen}
             onBlur={() => keyboard.current.reset()}
@@ -275,8 +270,6 @@ export function AgentPanel({ open, onClose, onOpen, triggerRef, surface, date, o
             {checking || pending ? <span className="agent-pill-spinner" aria-hidden="true" /> : <span aria-hidden="true">↑</span>}
           </button>}
         </form>
-        <p id="agent-input-hint" className="agent-input-hint">{paused ? "修改后点击继续" : `${sendLabel} 发送`} · {newlineLabel} 换行</p>
-        {!active && <p className="agent-privacy-note">发送会将指令和计划上下文交给所选助手。<button type="button" className="linkish quiet" onClick={() => { onClose(); navigate("/settings"); }}>设置</button></p>}
       </div>
     </aside>, document.body,
   );

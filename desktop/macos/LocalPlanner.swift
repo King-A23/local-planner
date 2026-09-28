@@ -215,11 +215,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     private func showSettings(fragment: String? = nil) {
         guard let baseURL else { return }
         if settingsWindow == nil {
-            let settings = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 720, height: 780),
+            let settings = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 840, height: 620),
                                     styleMask: [.titled, .closable, .miniaturizable, .resizable],
                                     backing: .buffered, defer: false)
             settings.title = "设置 · Local Planner"
-            settings.minSize = NSSize(width: 560, height: 520)
+            settings.minSize = NSSize(width: 640, height: 480)
             settings.isReleasedWhenClosed = false
             settings.center()
             settings.setFrameAutosaveName("LocalPlannerSettingsWindow")
@@ -241,8 +241,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     }
 
     private func revealSettingsSection(_ fragment: String) {
-        guard ["help", "about"].contains(fragment) else { return }
-        // A hash event also reopens a previously collapsed section at the same URL.
+        guard ["appearance", "assistant", "shortcuts", "data", "help", "about"].contains(fragment) else { return }
+        // Notify even when the requested section is already in the URL.
         settingsWebView?.evaluateJavaScript("window.location.hash = '\(fragment)'; window.dispatchEvent(new HashChangeEvent('hashchange'))")
     }
 
