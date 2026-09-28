@@ -58,6 +58,12 @@ def normalize_title(title: str) -> str:
     return stripped
 
 
+def normalize_notes(notes: str) -> str:
+    if not isinstance(notes, str) or len(notes) > 10000:
+        raise ValidationError("备注最长 10000 字")
+    return notes.replace("\r\n", "\n").replace("\r", "\n")
+
+
 @dataclass(frozen=True)
 class Task:
     id: TaskId
@@ -70,6 +76,7 @@ class Task:
     discarded_at: Optional[UtcInstant] = None
     series_id: Optional[str] = None
     occurrence_date: Optional[CalendarDate] = None
+    notes: str = ""
 
 
 @dataclass(frozen=True)
@@ -85,6 +92,7 @@ class DayTaskEntry:
     end_clock: Optional[str] = None
     series_id: Optional[str] = None
     occurrence_date: Optional[CalendarDate] = None
+    notes_snapshot: str = ""
 
 
 @dataclass(frozen=True)
@@ -99,6 +107,7 @@ class Errand:
     end_clock: Optional[str] = None
     series_id: Optional[str] = None
     occurrence_date: Optional[CalendarDate] = None
+    notes: str = ""
 
 
 @dataclass(frozen=True)
@@ -106,6 +115,8 @@ class DayRecord:
     date: CalendarDate
     status: DayStatus
     sealed_at: Optional[UtcInstant]
+    manual_todo_order: bool = False
+    manual_errand_order: bool = False
 
 
 @dataclass(frozen=True)
@@ -115,6 +126,8 @@ class DayPlan:
     sealed_at: Optional[UtcInstant]
     todos: list[DayTaskEntry]
     errands: list[Errand]
+    manual_todo_order: bool = False
+    manual_errand_order: bool = False
 
 
 @dataclass(frozen=True)

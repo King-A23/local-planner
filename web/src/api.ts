@@ -1,6 +1,7 @@
 export type Todo = {
   taskId: string;
   title: string;
+  notes: string;
   completedOnDay: boolean;
   sortOrder: number;
   startClock: string | null;
@@ -13,6 +14,7 @@ export type ErrandStatus = "open" | "completed" | "expired";
 export type Errand = {
   id: string;
   title: string;
+  notes: string;
   status: ErrandStatus;
   sortOrder: number;
   startClock: string | null;
@@ -34,6 +36,8 @@ export type DayPlan = {
   isPast: boolean;
   isFuture: boolean;
   writable: boolean;
+  manualTodoOrder: boolean;
+  manualErrandOrder: boolean;
   status: "open" | "sealed";
   todos: Todo[];
   errands: Errand[];
@@ -50,6 +54,7 @@ export type Meta = {
 export type InventoryItem = {
   taskId: string;
   title: string;
+  notes: string;
   createdAt: string;
   targetDate: string | null;
   recurrence?: RecurrenceOccurrence | null;
@@ -369,20 +374,21 @@ export function unscheduleTask(taskId: string): Promise<InventoryItem> {
   }).then((r) => readJson<InventoryItem>(r));
 }
 
-export function reorderTodos(date: string, taskIds: string[]): Promise<DayPlan> {
+export function reorderTodos(date: string, taskIds: string[], manual = true): Promise<DayPlan> {
   return jsonRequest(`/api/days/${date}/todos/order`, {
     method: "PUT",
-    body: JSON.stringify({ taskIds }),
+    body: JSON.stringify({ taskIds, manual }),
   }).then((r) => readJson<DayPlan>(r));
 }
 
 export function reorderErrands(
   date: string,
   errandIds: string[],
+  manual = true,
 ): Promise<DayPlan> {
   return jsonRequest(`/api/days/${date}/errands/order`, {
     method: "PUT",
-    body: JSON.stringify({ errandIds }),
+    body: JSON.stringify({ errandIds, manual }),
   }).then((r) => readJson<DayPlan>(r));
 }
 
@@ -412,4 +418,14 @@ export type Launcher = { id: string; name: string; command: string };
 export type LauncherCheck = { status: string; message: string };
 export function settingsRequest<T>(url: string, method = "GET", body?: unknown): Promise<T> {
   return jsonRequest(url, { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }).then((r) => readJson<T>(r));
+}
+
+export type SearchItem = { id: string; kind: "task" | "errand"; title: string; notes: string; date: string | null };
+export function searchItems(query: string, signal: AbortSignal): Promise<{ items: SearchItem[]; total: number; today: string }> {
+  return fetch(`/api/search?q=${encodeURIComponent(query)}`, { signal }).then((r) => readJson(r));
+}
+export function editItemDetails(item: Pick<SearchItem, "kind" | "id" | "title" | "notes">, title: string, notes: string): Promise<DayPlan | InventoryItem> {
+  return jsonRequest(`/api/${item.kind === "task" ? "tasks" : "errands"}/${item.id}/details`, {
+    method: "PATCH", body: JSON.stringify({ title, notes, expectedTitle: item.title, expectedNotes: item.notes }),
+  }).then((r) => readJson(r));
 }

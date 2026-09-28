@@ -5,6 +5,7 @@ export function useQuickAdd(enabled: boolean) {
   useEffect(() => {
     if (!enabled) return;
     function focus() {
+      if (document.querySelector("dialog[open]")) return;
       inputRef.current?.focus();
       inputRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
     }

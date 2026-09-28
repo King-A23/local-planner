@@ -7,7 +7,7 @@ from dataclasses import replace
 from datetime import datetime
 
 from local_planner.clock import Clock, format_utc
-from local_planner.domain.models import CalendarDate, DayRecord, parse_calendar_date
+from local_planner.domain.models import CalendarDate, parse_calendar_date
 from local_planner.domain.store import UnitOfWork
 
 logger = logging.getLogger(__name__)
@@ -43,7 +43,7 @@ def settle_one_day(d: CalendarDate, now: datetime | str, uow: UnitOfWork) -> Non
     for errand in uow.list_errands(d):
         if errand.status == "open":
             uow.save_errand(replace(errand, status="expired", completed_at=None))
-    uow.save_day(DayRecord(date=d, status="sealed", sealed_at=instant))
+    uow.save_day(replace(rec, status="sealed", sealed_at=instant))
 
 
 def seal_day(clock: Clock, uow: UnitOfWork, d: CalendarDate) -> None:

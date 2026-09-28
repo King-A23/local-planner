@@ -1,3 +1,6 @@
+import { openItemEditor, NotesMark } from "./ItemEditor";
+import { useItemFocus } from "./useItemFocus";
+import { useEntryKeyboard } from "./useEntryKeyboard";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import {
@@ -41,6 +44,8 @@ export function InventoryPage({
   const maxDate = maxWritableDate(today);
   const quickAddRef = useQuickAdd(items !== null);
   const addingRef = useRef(false);
+  useItemFocus(items !== null, items);
+  const entryKeyboard = useEntryKeyboard(() => { setDraft(""); quickAddRef.current?.blur(); });
 
   function dueHint(target: string | null): string | null {
     if (!target) {
@@ -94,6 +99,7 @@ export function InventoryPage({
 
   async function onAdd(event: FormEvent): Promise<void> {
     event.preventDefault();
+    if (entryKeyboard.shouldIgnoreSubmit()) return;
     const title = draft.trim();
     if (!title || addingRef.current) {
       return;
@@ -125,8 +131,8 @@ export function InventoryPage({
       ) : (
         <ul className="inventory-list">
           {items.map((item) => (
-            <li key={item.taskId} className="inventory-item">
-              <span className="title">{item.title}</span>
+            <li key={item.taskId} className="inventory-item" data-item-id={item.taskId}>
+              <button type="button" className="title" onClick={() => openItemEditor({ id: item.taskId, kind: "task", title: item.title, notes: item.notes, writable: true })}>{item.title}<NotesMark notes={item.notes} /></button>
               {dueHint(item.targetDate) ? (
                 <span className="badge">{dueHint(item.targetDate)}</span>
               ) : null}
@@ -196,7 +202,7 @@ export function InventoryPage({
             <span className="visually-hidden">新的待办事项</span>
             <input
               ref={quickAddRef}
-              onKeyDown={(e) => { if (e.key === "Escape") { setDraft(""); e.currentTarget.blur(); } }}
+              {...entryKeyboard.bind}
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
               aria-label="新的待办事项"
@@ -236,6 +242,7 @@ export function InventoryPage({
           <button
             type="submit"
             className="button-primary inventory-add-button"
+            onClick={entryKeyboard.allowSubmit}
             disabled={!draft.trim()}
           >
             添加

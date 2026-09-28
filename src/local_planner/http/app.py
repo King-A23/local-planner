@@ -19,6 +19,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from local_planner.domain.search import search_items
 from local_planner.domain.undo import delete_with_undo, undo_delete
 from local_planner.recovery import ensure_daily_backup
 from local_planner.launcher_health import check_launcher
@@ -81,6 +82,18 @@ class TitleBody(BaseModel):
     targetDate: str | None = None
 
 
+class QuickEntryBody(BaseModel):
+    title: str
+    destination: Literal["inventory", "today"] = "inventory"
+
+
+class DetailsBody(BaseModel):
+    title: str
+    notes: str
+    expectedTitle: str
+    expectedNotes: str
+
+
 class DateBody(BaseModel):
     date: str | None = None
 
@@ -128,10 +141,12 @@ class RecurrenceUpdateBody(BaseModel):
 
 class TaskOrderBody(BaseModel):
     taskIds: list[str]
+    manual: bool = True
 
 
 class ErrandOrderBody(BaseModel):
     errandIds: list[str]
+    manual: bool = True
 
 
 def health() -> dict[str, bool | str]:
@@ -368,6 +383,32 @@ def create_app(
             ),
         )
 
+    @app.post("/api/quick-entry")
+    def quick_entry(body: QuickEntryBody) -> dict[str, Any]:
+        return _locked(ctx, lambda today: command_payload(
+            cmds.add_todo_on_day(ctx.clock, ctx.uow, today, body.title)
+            if body.destination == "today" else cmds.add_to_inventory(ctx.clock, ctx.uow, body.title),
+            today,
+        ))
+
+    @app.get("/api/search")
+    def search(q: str = Query(min_length=1, max_length=200)) -> dict[str, Any]:
+        return _locked(ctx, lambda today: search_items(ctx.clock, ctx.uow, q))
+
+    @app.patch("/api/tasks/{item_id}/details")
+    def edit_task_details(item_id: str, body: DetailsBody) -> dict[str, Any]:
+        return _locked(ctx, lambda today: command_payload(cmds.edit_details(
+            ctx.clock, ctx.uow, "task", item_id, body.title, body.notes,
+            body.expectedTitle, body.expectedNotes,
+        ), today))
+
+    @app.patch("/api/errands/{item_id}/details")
+    def edit_errand_details(item_id: str, body: DetailsBody) -> dict[str, Any]:
+        return _locked(ctx, lambda today: command_payload(cmds.edit_details(
+            ctx.clock, ctx.uow, "errand", item_id, body.title, body.notes,
+            body.expectedTitle, body.expectedNotes,
+        ), today))
+
     @app.get("/api/inventory")
     def list_inventory() -> dict[str, Any]:
         return _locked(
@@ -540,7 +581,7 @@ def create_app(
         return _locked(
             ctx,
             lambda today: day_plan_payload(
-                cmds.reorder_todos(ctx.clock, ctx.uow, day_date, body.taskIds),
+                cmds.reorder_todos(ctx.clock, ctx.uow, day_date, body.taskIds, manual=body.manual),
                 today,
             ),
         )
@@ -595,7 +636,7 @@ def create_app(
         return _locked(
             ctx,
             lambda today: day_plan_payload(
-                cmds.reorder_errands(ctx.clock, ctx.uow, day_date, body.errandIds),
+                cmds.reorder_errands(ctx.clock, ctx.uow, day_date, body.errandIds, manual=body.manual),
                 today,
             ),
         )

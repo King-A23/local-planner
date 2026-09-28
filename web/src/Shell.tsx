@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
 
+import { SearchIcon } from "./SearchDialog";
 import { MonthCalendar } from "./Calendar";
 import { DISPLAY_NAME } from "./constants";
 import { handleNavClick } from "./route";
@@ -10,6 +11,7 @@ type ShellProps = {
   today?: string;
   viewedDate?: string;
   activeSection?: "today" | "inventory" | "recurrences" | "settings";
+  onSearch: () => void;
   agentOpen: boolean;
   agentStatus?: string | null;
   onOpenAgent: (trigger: HTMLButtonElement) => void;
@@ -24,6 +26,7 @@ export function Shell({
   agentOpen,
   agentStatus,
   onOpenAgent,
+  onSearch,
 }: ShellProps) {
   const [calOpen, setCalOpen] = useState(false);
 
@@ -80,6 +83,7 @@ export function Shell({
           >
             日历
           </button>
+          <button type="button" className="nav-search" aria-label="搜索事项" title="搜索（⌘ / Ctrl + K）" onClick={onSearch}><SearchIcon /></button>
           <a href="/settings" aria-current={activeSection === "settings" ? "page" : undefined} onClick={(e) => handleNavClick(e, "/settings")}>设置</a>
           {calOpen && today ? (
             <MonthCalendar

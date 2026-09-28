@@ -41,8 +41,14 @@ def day_plan_payload(plan: DayPlan, today: str) -> dict[str, Any]:
             item.start_clock, item.end_clock, item.sort_order
         ),
     )
+    if plan.manual_todo_order:
+        todos.sort(key=lambda item: item.sort_order)
+    if plan.manual_errand_order:
+        errands.sort(key=lambda item: item.sort_order)
     return {
         "date": plan.date,
+        "manualTodoOrder": plan.manual_todo_order,
+        "manualErrandOrder": plan.manual_errand_order,
         "serverToday": today,
         "isToday": plan.date == today,
         "isPast": plan.date < today,
@@ -53,6 +59,7 @@ def day_plan_payload(plan: DayPlan, today: str) -> dict[str, Any]:
             {
                 "taskId": item.task_id,
                 "title": item.title_snapshot,
+                "notes": item.notes_snapshot,
                 "completedOnDay": item.completed_on_day,
                 "sortOrder": item.sort_order,
                 "startClock": item.start_clock,
@@ -69,6 +76,7 @@ def day_plan_payload(plan: DayPlan, today: str) -> dict[str, Any]:
             {
                 "id": item.id,
                 "title": item.title,
+                "notes": item.notes,
                 "status": item.status,
                 "sortOrder": item.sort_order,
                 "startClock": item.start_clock,
@@ -88,6 +96,7 @@ def inventory_item_payload(item: InventoryItem) -> dict[str, Any]:
     return {
         "taskId": item.task.id,
         "title": item.task.title,
+        "notes": item.task.notes,
         "createdAt": item.task.created_at,
         "targetDate": item.task.target_date,
         "seriesId": item.task.series_id,
@@ -220,6 +229,7 @@ def context_payload(clock: Clock, uow: UnitOfWork, today: str) -> dict[str, Any]
         {
             "taskId": task.id,
             "title": task.title,
+            "notes": task.notes,
             "date": task.current_scheduled_date,
         }
         for task in uow.list_scheduled_after(today)
@@ -228,6 +238,7 @@ def context_payload(clock: Clock, uow: UnitOfWork, today: str) -> dict[str, Any]
         {
             "id": item.id,
             "title": item.title,
+            "notes": item.notes,
             "date": item.day_date,
             "status": item.status,
             "startClock": item.start_clock,

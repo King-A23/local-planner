@@ -26,6 +26,7 @@ from local_planner.domain.models import (
     add_calendar_days,
     check_year_cap,
     normalize_title,
+    normalize_notes,
     parse_calendar_date,
 )
 from local_planner.domain.recurrence import (
@@ -134,6 +135,8 @@ def _read_day(clock: Clock, uow: UnitOfWork, d: CalendarDate) -> DayPlan:
         date=iso,
         status=rec.status,
         sealed_at=rec.sealed_at,
+        manual_todo_order=rec.manual_todo_order,
+        manual_errand_order=rec.manual_errand_order,
         todos=todos,
         errands=errands,
     )
@@ -238,6 +241,7 @@ def schedule_to_date(
                 day_date=iso,
                 task_id=task_id,
                 title_snapshot=task.title,
+                notes_snapshot=task.notes,
                 sort_order=_next_sort(uow.list_entries(iso)),
                 completed_on_day=False,
                 series_id=task.series_id,
@@ -401,6 +405,36 @@ def rename_task(
     return InventoryItem(task=updated)
 
 
+def edit_details(
+    clock: Clock, uow: UnitOfWork, kind: str, item_id: str,
+    title: str, notes: str, expected_title: str, expected_notes: str,
+) -> DayPlan | InventoryItem:
+    """Atomic editing with stale-draft protection; sealed snapshots stay untouched."""
+    title, notes = normalize_title(title), normalize_notes(notes)
+    if kind == "errand":
+        item = _errand_on_writable_day(clock, uow, item_id)
+        if (item.title, item.notes) != (expected_title, expected_notes):
+            raise Conflict("事项已在别处修改。请保留草稿，关闭后重新打开核对。")
+        uow.save_errand(replace(item, title=title, notes=notes))
+        return open_day(clock, uow, item.day_date)
+    task = _require_task(uow, item_id)
+    if task.discarded_at is not None:
+        raise NotFound("事项已删除")
+    edit_date = task.current_scheduled_date or task.completed_on_date
+    if edit_date is not None:
+        require_writable_day(clock, uow, edit_date)
+    if (task.title, task.notes) != (expected_title, expected_notes):
+        raise Conflict("事项已在别处修改。请保留草稿，关闭后重新打开核对。")
+    updated = replace(task, title=title, notes=notes)
+    uow.save_task(updated)
+    for entry in uow.list_entries_for_task(item_id):
+        if not _snapshot_is_sealed(clock, uow, entry.day_date):
+            uow.save_entry(replace(entry, title_snapshot=title, notes_snapshot=notes))
+    if edit_date is not None:
+        return open_day(clock, uow, edit_date)
+    return InventoryItem(task=updated)
+
+
 def delete_task(clock: Clock, uow: UnitOfWork, task_id: TaskId) -> None:
     task = _require_task(uow, task_id)
     entries = uow.list_entries_for_task(task_id)
@@ -424,7 +458,8 @@ def delete_task(clock: Clock, uow: UnitOfWork, task_id: TaskId) -> None:
 
 
 def reorder_todos(
-    clock: Clock, uow: UnitOfWork, d: CalendarDate, task_ids: list[TaskId]
+    clock: Clock, uow: UnitOfWork, d: CalendarDate, task_ids: list[TaskId],
+    *, manual: bool = True,
 ) -> DayPlan:
     iso = require_writable_day(clock, uow, d)
     current = [e.task_id for e in uow.list_entries(iso)]
@@ -440,11 +475,14 @@ def reorder_todos(
         uow.save_entry(replace(entry, sort_order=i + _SORT_ORDER_TEMP))
     for i, entry in staged:
         uow.save_entry(replace(entry, sort_order=i))
+    ensure_open_day(uow, iso)
+    uow.save_day(replace(uow.get_day(iso), manual_todo_order=manual))
     return open_day(clock, uow, iso)
 
 
 def reorder_errands(
-    clock: Clock, uow: UnitOfWork, d: CalendarDate, errand_ids: list[ErrandId]
+    clock: Clock, uow: UnitOfWork, d: CalendarDate, errand_ids: list[ErrandId],
+    *, manual: bool = True,
 ) -> DayPlan:
     iso = require_writable_day(clock, uow, d)
     current = [e.id for e in uow.list_errands(iso)]
@@ -460,6 +498,8 @@ def reorder_errands(
         uow.save_errand(replace(errand, sort_order=i + _SORT_ORDER_TEMP))
     for i, errand in staged:
         uow.save_errand(replace(errand, sort_order=i))
+    ensure_open_day(uow, iso)
+    uow.save_day(replace(uow.get_day(iso), manual_errand_order=manual))
     return open_day(clock, uow, iso)
 
 

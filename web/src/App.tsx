@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { ItemEditorHost } from "./ItemEditor";
+import { SearchDialog } from "./SearchDialog";
 import { AgentPanel } from "./AgentPanel";
 import { errorMessage, getMeta, type Meta } from "./api";
 import { BackgroundDecorations } from "./BackgroundDecorations";
@@ -30,6 +32,7 @@ function useLocation(): { pathname: string; search: string } {
 export function App() {
   const { pathname, search } = useLocation();
   const route = parseRoute(pathname);
+  const [searchOpen, setSearchOpen] = useState(false);
   const [meta, setMeta] = useState<Meta | null>(null);
   const [metaError, setMetaError] = useState<string | null>(null);
   const [agentOpen, setAgentOpen] = useState(() => {
@@ -90,9 +93,25 @@ export function App() {
   const refreshAll = useCallback(() => { setAgentRunTick((tick) => tick + 1); refreshMeta(); }, [refreshMeta]);
   useEffect(() => {
     window.addEventListener("planner:restored", refreshAll);
-    return () => window.removeEventListener("planner:restored", refreshAll);
+    window.addEventListener("planner:items-changed", refreshAll);
+    return () => {
+      window.removeEventListener("planner:restored", refreshAll);
+      window.removeEventListener("planner:items-changed", refreshAll);
+    };
   }, [refreshAll]);
   useEffect(() => { if (route.kind === "settings") setAgentOpen(false); }, [route.kind]);
+
+  useEffect(() => {
+    const open = () => { if (!document.querySelector("dialog[open]")) setSearchOpen(true); };
+    const key = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k" && !event.altKey && !event.shiftKey && !event.isComposing) {
+        event.preventDefault(); open();
+      }
+    };
+    window.addEventListener("keydown", key);
+    window.addEventListener("planner:search", open);
+    return () => { window.removeEventListener("keydown", key); window.removeEventListener("planner:search", open); };
+  }, []);
 
   let body;
   if (route.kind === "settings") {
@@ -215,9 +234,12 @@ export function App() {
         activeSection={activeSection}
         agentOpen={agentOpen}
         onOpenAgent={openAgent}
+        onSearch={() => setSearchOpen(true)}
       >
         {body}
       </Shell>
+      <ItemEditorHost />
+      {searchOpen && <SearchDialog onClose={() => setSearchOpen(false)} />}
       <UndoToast onChanged={refreshAll} />
       <AgentPanel
         onStatusChange={setAgentStatus}

@@ -71,7 +71,7 @@ class SqliteUnitOfWork:
     def get_task(self, task_id: TaskId) -> Task | None:
         row = self.conn.execute(
             "SELECT t.id, t.title, t.created_at, t.current_scheduled_date, "
-            "t.completed_at, t.completed_on_date, t.target_date, t.discarded_at, "
+            "t.completed_at, t.completed_on_date, t.target_date, t.discarded_at, t.notes, "
             "ro.series_id AS recurrence_series_id, "
             "ro.occurrence_date AS recurrence_occurrence_date "
             "FROM tasks t LEFT JOIN recurrence_occurrences ro "
@@ -85,8 +85,8 @@ class SqliteUnitOfWork:
             """
             INSERT INTO tasks (
               id, title, created_at, current_scheduled_date,
-              completed_at, completed_on_date, target_date, discarded_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+              completed_at, completed_on_date, target_date, discarded_at, notes
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
               title = excluded.title,
               created_at = excluded.created_at,
@@ -94,7 +94,8 @@ class SqliteUnitOfWork:
               completed_at = excluded.completed_at,
               completed_on_date = excluded.completed_on_date,
               target_date = excluded.target_date,
-              discarded_at = excluded.discarded_at
+              discarded_at = excluded.discarded_at,
+              notes = excluded.notes
             """,
             (
                 task.id,
@@ -105,6 +106,7 @@ class SqliteUnitOfWork:
                 task.completed_on_date,
                 task.target_date,
                 task.discarded_at,
+                task.notes,
             ),
         )
 
@@ -113,7 +115,7 @@ class SqliteUnitOfWork:
 
     def get_day(self, d: CalendarDate) -> DayRecord | None:
         row = self.conn.execute(
-            "SELECT date, status, sealed_at FROM days WHERE date = ?",
+            "SELECT date, status, sealed_at, manual_todo_order, manual_errand_order FROM days WHERE date = ?",
             (d,),
         ).fetchone()
         return None if row is None else _day_from_row(row)
@@ -121,17 +123,19 @@ class SqliteUnitOfWork:
     def save_day(self, day: DayRecord) -> None:
         self.conn.execute(
             """
-            INSERT INTO days (date, status, sealed_at) VALUES (?, ?, ?)
+            INSERT INTO days (date, status, sealed_at, manual_todo_order, manual_errand_order) VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(date) DO UPDATE SET
               status = excluded.status,
-              sealed_at = excluded.sealed_at
+              sealed_at = excluded.sealed_at,
+              manual_todo_order = excluded.manual_todo_order,
+              manual_errand_order = excluded.manual_errand_order
             """,
-            (day.date, day.status, day.sealed_at),
+            (day.date, day.status, day.sealed_at, day.manual_todo_order, day.manual_errand_order),
         )
 
     def get_entry(self, day: CalendarDate, task_id: TaskId) -> DayTaskEntry | None:
         row = self.conn.execute(
-            "SELECT e.day_date, e.task_id, e.title_snapshot, e.sort_order, "
+            "SELECT e.day_date, e.task_id, e.title_snapshot, e.notes_snapshot, e.sort_order, "
             "e.completed_on_day, e.start_clock, e.end_clock, "
             "ro.series_id AS recurrence_series_id, "
             "ro.occurrence_date AS recurrence_occurrence_date "
@@ -144,7 +148,7 @@ class SqliteUnitOfWork:
 
     def list_entries(self, day: CalendarDate) -> list[DayTaskEntry]:
         rows = self.conn.execute(
-            "SELECT e.day_date, e.task_id, e.title_snapshot, e.sort_order, "
+            "SELECT e.day_date, e.task_id, e.title_snapshot, e.notes_snapshot, e.sort_order, "
             "e.completed_on_day, e.start_clock, e.end_clock, "
             "ro.series_id AS recurrence_series_id, "
             "ro.occurrence_date AS recurrence_occurrence_date "
@@ -157,7 +161,7 @@ class SqliteUnitOfWork:
 
     def list_entries_for_task(self, task_id: TaskId) -> list[DayTaskEntry]:
         rows = self.conn.execute(
-            "SELECT e.day_date, e.task_id, e.title_snapshot, e.sort_order, "
+            "SELECT e.day_date, e.task_id, e.title_snapshot, e.notes_snapshot, e.sort_order, "
             "e.completed_on_day, e.start_clock, e.end_clock, "
             "ro.series_id AS recurrence_series_id, "
             "ro.occurrence_date AS recurrence_occurrence_date "
@@ -174,14 +178,15 @@ class SqliteUnitOfWork:
             """
             INSERT INTO day_task_entries (
               day_date, task_id, title_snapshot, sort_order, completed_on_day,
-              start_clock, end_clock
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+              start_clock, end_clock, notes_snapshot
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(day_date, task_id) DO UPDATE SET
               title_snapshot = excluded.title_snapshot,
               sort_order = excluded.sort_order,
               completed_on_day = excluded.completed_on_day,
               start_clock = excluded.start_clock,
-              end_clock = excluded.end_clock
+              end_clock = excluded.end_clock,
+              notes_snapshot = excluded.notes_snapshot
             """,
             (
                 entry.day_date,
@@ -191,6 +196,7 @@ class SqliteUnitOfWork:
                 1 if entry.completed_on_day else 0,
                 entry.start_clock,
                 entry.end_clock,
+                entry.notes_snapshot,
             ),
         )
 
@@ -202,7 +208,7 @@ class SqliteUnitOfWork:
 
     def get_errand(self, errand_id: ErrandId) -> Errand | None:
         row = self.conn.execute(
-            "SELECT e.id, e.day_date, e.title, e.sort_order, e.status, "
+            "SELECT e.id, e.day_date, e.title, e.notes, e.sort_order, e.status, "
             "e.completed_at, e.start_clock, e.end_clock, "
             "ro.series_id AS recurrence_series_id, "
             "ro.occurrence_date AS recurrence_occurrence_date "
@@ -214,7 +220,7 @@ class SqliteUnitOfWork:
 
     def list_errands(self, day: CalendarDate) -> list[Errand]:
         rows = self.conn.execute(
-            "SELECT e.id, e.day_date, e.title, e.sort_order, e.status, "
+            "SELECT e.id, e.day_date, e.title, e.notes, e.sort_order, e.status, "
             "e.completed_at, e.start_clock, e.end_clock, "
             "ro.series_id AS recurrence_series_id, "
             "ro.occurrence_date AS recurrence_occurrence_date "
@@ -230,8 +236,8 @@ class SqliteUnitOfWork:
             """
             INSERT INTO errands (
               id, day_date, title, sort_order, status, completed_at,
-              start_clock, end_clock
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+              start_clock, end_clock, notes
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
               day_date = excluded.day_date,
               title = excluded.title,
@@ -239,7 +245,8 @@ class SqliteUnitOfWork:
               status = excluded.status,
               completed_at = excluded.completed_at,
               start_clock = excluded.start_clock,
-              end_clock = excluded.end_clock
+              end_clock = excluded.end_clock,
+              notes = excluded.notes
             """,
             (
                 errand.id,
@@ -250,6 +257,7 @@ class SqliteUnitOfWork:
                 errand.completed_at,
                 errand.start_clock,
                 errand.end_clock,
+                errand.notes,
             ),
         )
 
@@ -260,7 +268,7 @@ class SqliteUnitOfWork:
         rows = self.conn.execute(
             """
             SELECT t.id, t.title, t.created_at, t.current_scheduled_date,
-                   t.completed_at, t.completed_on_date, t.target_date, t.discarded_at,
+                   t.completed_at, t.completed_on_date, t.target_date, t.discarded_at, t.notes,
                    ro.series_id AS recurrence_series_id,
                    ro.occurrence_date AS recurrence_occurrence_date
             FROM tasks t
@@ -277,7 +285,7 @@ class SqliteUnitOfWork:
         rows = self.conn.execute(
             """
             SELECT t.id, t.title, t.created_at, t.current_scheduled_date,
-                   t.completed_at, t.completed_on_date, t.target_date, t.discarded_at,
+                   t.completed_at, t.completed_on_date, t.target_date, t.discarded_at, t.notes,
                    ro.series_id AS recurrence_series_id,
                    ro.occurrence_date AS recurrence_occurrence_date
             FROM tasks t
@@ -295,7 +303,7 @@ class SqliteUnitOfWork:
     def list_errands_after(self, today: CalendarDate) -> list[Errand]:
         rows = self.conn.execute(
             """
-            SELECT e.id, e.day_date, e.title, e.sort_order, e.status,
+            SELECT e.id, e.day_date, e.title, e.notes, e.sort_order, e.status,
                    e.completed_at, e.start_clock, e.end_clock,
                    ro.series_id AS recurrence_series_id,
                    ro.occurrence_date AS recurrence_occurrence_date
@@ -449,6 +457,7 @@ def _task_from_row(row: sqlite3.Row) -> Task:
     return Task(
         id=row["id"],
         title=row["title"],
+        notes=row["notes"],
         created_at=row["created_at"],
         current_scheduled_date=row["current_scheduled_date"],
         completed_at=row["completed_at"],
@@ -473,6 +482,8 @@ def _day_from_row(row: sqlite3.Row) -> DayRecord:
         date=row["date"],
         status=row["status"],
         sealed_at=row["sealed_at"],
+        manual_todo_order=bool(row["manual_todo_order"]),
+        manual_errand_order=bool(row["manual_errand_order"]),
     )
 
 
@@ -481,6 +492,7 @@ def _entry_from_row(row: sqlite3.Row) -> DayTaskEntry:
         day_date=row["day_date"],
         task_id=row["task_id"],
         title_snapshot=row["title_snapshot"],
+        notes_snapshot=row["notes_snapshot"],
         sort_order=int(row["sort_order"]),
         completed_on_day=bool(row["completed_on_day"]),
         start_clock=row["start_clock"] if "start_clock" in row.keys() else None,
@@ -503,6 +515,7 @@ def _errand_from_row(row: sqlite3.Row) -> Errand:
         id=row["id"],
         day_date=row["day_date"],
         title=row["title"],
+        notes=row["notes"],
         sort_order=int(row["sort_order"]),
         status=row["status"],
         completed_at=row["completed_at"],

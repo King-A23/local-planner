@@ -89,7 +89,7 @@ def test_schema_v1_tables_indexes_triggers_and_meta(uow: SqliteUnitOfWork) -> No
     }
     assert uow.conn.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[
         0
-    ] == 6
+    ] == 7
     columns = {
         row[1]
         for row in uow.conn.execute("PRAGMA table_info(recurrence_series)")
@@ -256,7 +256,7 @@ def test_second_open_does_not_rerun_init(db_path: Path) -> None:
     try:
         assert second.conn.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[
             0
-        ] == 6
+        ] == 7
     finally:
         second.close()
 

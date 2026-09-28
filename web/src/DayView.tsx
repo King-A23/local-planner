@@ -1,3 +1,7 @@
+import { openItemEditor, NotesMark } from "./ItemEditor";
+import { useItemFocus } from "./useItemFocus";
+import { useEntryKeyboard } from "./useEntryKeyboard";
+import { ReorderList, type ReorderRow } from "./ReorderList";
 import { WelcomeTip } from "./WelcomeTip";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
@@ -10,11 +14,10 @@ import {
   deleteErrand,
   deleteTask,
   errorMessage,
-  isDayPlan,
   listInventory,
   openDay,
-  renameErrand,
-  renameTask,
+  reorderTodos,
+  reorderErrands,
   scheduleTask,
   setErrandClocks,
   setTodoClocks,
@@ -65,8 +68,13 @@ export function DayView({
   const quickAddRef = useQuickAdd(Boolean(plan?.writable) && !loading);
   const addingRef = useRef(false);
   const addingErrandRef = useRef(false);
+  const activeDateRef = useRef(date);
+  activeDateRef.current = date;
   const planRef = useRef(plan);
   planRef.current = plan;
+  useItemFocus(!loading && plan?.date === date, plan);
+  const addKeyboard = useEntryKeyboard(() => { setDraft(""); quickAddRef.current?.blur(); });
+  const errandKeyboard = useEntryKeyboard(() => setErrandDraft(""));
 
   useEffect(() => {
     let cancelled = false;
@@ -127,17 +135,17 @@ export function DayView({
   ): Promise<boolean> {
     try {
       const next = await work();
-      if (next) {
+      if (next && next.date === activeDateRef.current) {
         setPlan(next);
       }
       setError(null);
       return true;
     } catch (err: unknown) {
       setError(errorMessage(err));
-      if (err instanceof ApiError && err.error === "DaySealed") {
+      if (err instanceof ApiError && (err.error === "DaySealed" || err.error === "Conflict")) {
         try {
           const sealed = await openDay(date);
-          setPlan(sealed);
+          if (sealed.date === activeDateRef.current) setPlan(sealed);
         } catch {
           // keep DaySealed message from the write
         }
@@ -148,6 +156,7 @@ export function DayView({
 
   async function onAdd(event: FormEvent): Promise<void> {
     event.preventDefault();
+    if (addKeyboard.shouldIgnoreSubmit()) return;
     if (!plan?.writable) {
       return;
     }
@@ -173,34 +182,6 @@ export function DayView({
         ? uncompleteTodo(plan.date, todo.taskId)
         : completeTodo(plan.date, todo.taskId),
     );
-  }
-
-  function onRename(todo: Todo, title: string): void {
-    if (!plan?.writable) {
-      return;
-    }
-    const nextTitle = title.trim();
-    if (!nextTitle || nextTitle === todo.title) {
-      return;
-    }
-    void apply(async () => {
-      const result = await renameTask(todo.taskId, nextTitle);
-      if (isDayPlan(result)) {
-        return result;
-      }
-      setPlan((current) =>
-        current
-          ? {
-              ...current,
-              todos: current.todos.map((item) =>
-                item.taskId === todo.taskId
-                  ? { ...item, title: result.title }
-                  : item,
-              ),
-            }
-          : current,
-      );
-    });
   }
 
   function onDelete(todo: Todo): void {
@@ -279,6 +260,7 @@ export function DayView({
 
   async function onAddErrand(event: FormEvent): Promise<void> {
     event.preventDefault();
+    if (errandKeyboard.shouldIgnoreSubmit()) return;
     if (!plan?.writable) {
       return;
     }
@@ -303,17 +285,6 @@ export function DayView({
         ? uncompleteErrand(errand.id)
         : completeErrand(errand.id),
     );
-  }
-
-  function onRenameErrand(errand: Errand, title: string): void {
-    if (!plan?.writable) {
-      return;
-    }
-    const nextTitle = title.trim();
-    if (!nextTitle || nextTitle === errand.title) {
-      return;
-    }
-    void apply(() => renameErrand(errand.id, nextTitle));
   }
 
   function onDeleteErrand(errand: Errand): void {
@@ -378,6 +349,7 @@ export function DayView({
         <section className="column">
           <div className="list-heading">
             <h2>{plan.isToday ? "今日计划" : "当天计划"}</h2>
+            {plan.writable && plan.manualTodoOrder && <button type="button" className="linkish quiet order-reset" title="恢复按时间排序" onClick={() => void apply(() => reorderTodos(plan.date, plan.todos.map((item) => item.taskId), false))}>按时间</button>}
             {plan.writable ? (
               <button
                 type="button"
@@ -393,14 +365,15 @@ export function DayView({
               先写下今天想做的一件事，也可以从待办里挑选。
             </p>
           ) : (
-            <ul className="todos">
-              {plan.todos.map((todo) => (
+            <ReorderList key={`todos-${plan.date}`} items={plan.todos} getId={(item) => item.taskId} getLabel={(item) => item.title}
+              writable={plan.writable} onReorder={(ids) => apply(async () => { await reorderTodos(plan.date, ids); return openDay(plan.date); })}>
+              {(todo, reorder) => (
                 <TodoRow
                   key={todo.taskId}
                   todo={todo}
                   writable={plan.writable}
                   onToggle={onToggle}
-                  onRename={onRename}
+                  reorder={reorder}
                   onDelete={onDelete}
                   onUnschedule={onUnschedule}
                   onClocks={(todo, start, end) => {
@@ -409,14 +382,14 @@ export function DayView({
                     );
                   }}
                 />
-              ))}
-            </ul>
+              )}
+            </ReorderList>
           )}
           {plan.writable ? (
             <form className="add-form" onSubmit={onAdd}>
               <input
                 ref={quickAddRef}
-                onKeyDown={(e) => { if (e.key === "Escape") { setDraft(""); e.currentTarget.blur(); } }}
+                {...addKeyboard.bind}
                 value={draft}
                 onChange={(event) => setDraft(event.target.value)}
                 aria-label="添加计划"
@@ -436,6 +409,7 @@ export function DayView({
         <section className="column">
           <div className="list-heading">
             <h2>零碎事项</h2>
+            {plan.writable && plan.manualErrandOrder && <button type="button" className="linkish quiet order-reset" title="恢复按时间排序" onClick={() => void apply(() => reorderErrands(plan.date, plan.errands.map((item) => item.id), false))}>按时间</button>}
             {plan.writable ? (
               <button
                 type="button"
@@ -449,14 +423,15 @@ export function DayView({
           {plan.errands.length === 0 ? (
             <p className="column-empty">取快递、买杯咖啡……当天的小事记在这里。</p>
           ) : (
-            <ul className="todos">
-              {plan.errands.map((errand) => (
+            <ReorderList key={`errands-${plan.date}`} items={plan.errands} getId={(item) => item.id} getLabel={(item) => item.title}
+              writable={plan.writable} onReorder={(ids) => apply(async () => { await reorderErrands(plan.date, ids); return openDay(plan.date); })}>
+              {(errand, reorder) => (
                 <ErrandRow
                   key={errand.id}
                   errand={errand}
                   writable={plan.writable}
                   onToggle={onToggleErrand}
-                  onRename={onRenameErrand}
+                  reorder={reorder}
                   onDelete={onDeleteErrand}
                   onClocks={(errand, start, end) => {
                     void apply(() =>
@@ -464,13 +439,13 @@ export function DayView({
                     );
                   }}
                 />
-              ))}
-            </ul>
+              )}
+            </ReorderList>
           )}
           {plan.writable ? (
             <form className="add-form" onSubmit={onAddErrand}>
               <input
-                onKeyDown={(e) => { if (e.key === "Escape") { setErrandDraft(""); e.currentTarget.blur(); } }}
+                {...errandKeyboard.bind}
                 value={errandDraft}
                 onChange={(event) => setErrandDraft(event.target.value)}
                 aria-label="添加零碎事项"
@@ -489,7 +464,7 @@ type TodoRowProps = {
   todo: Todo;
   writable: boolean;
   onToggle: (todo: Todo) => void;
-  onRename: (todo: Todo, title: string) => void;
+  reorder: ReorderRow;
   onDelete: (todo: Todo) => void;
   onUnschedule: (todo: Todo) => void;
   onClocks: (
@@ -503,32 +478,14 @@ function TodoRow({
   todo,
   writable,
   onToggle,
-  onRename,
+  reorder,
   onDelete,
   onUnschedule,
   onClocks,
 }: TodoRowProps) {
-  const [editing, setEditing] = useState(false);
-  const [title, setTitle] = useState(todo.title);
-
-  useEffect(() => {
-    setTitle(todo.title);
-  }, [todo.title]);
-
-  function finish(save: boolean): void {
-    if (!editing) {
-      return;
-    }
-    setEditing(false);
-    if (save) {
-      onRename(todo, title);
-    } else {
-      setTitle(todo.title);
-    }
-  }
-
   return (
-    <li className={todo.completedOnDay ? "todo done" : "todo"}>
+    <li className={todo.completedOnDay ? "todo done" : "todo"} data-item-id={todo.taskId} {...reorder.attributes}>
+      {reorder.handle}
       <input
         type="checkbox"
         checked={todo.completedOnDay}
@@ -536,39 +493,9 @@ function TodoRow({
         onChange={() => onToggle(todo)}
         aria-label={todo.title}
       />
-      {editing && writable ? (
-        <input
-          className="title-input"
-          value={title}
-          onChange={(event) => setTitle(event.target.value)}
-          onBlur={() => finish(true)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              finish(true);
-            }
-            if (event.key === "Escape") {
-              finish(false);
-            }
-          }}
-          maxLength={200}
-          aria-label="改标题"
-          autoFocus
-        />
-      ) : (
-        <button
-          type="button"
-          className="title"
-          disabled={!writable}
-          onClick={() => {
-            if (writable) {
-              setEditing(true);
-            }
-          }}
-        >
-          {todo.title}
-        </button>
-      )}
+      <button type="button" className="title" onClick={() => openItemEditor({ id: todo.taskId, kind: "task", title: todo.title, notes: todo.notes, writable })}>
+        {todo.title}<NotesMark notes={todo.notes} />
+      </button>
       {todo.recurrence ? (
         <span className="badge recurrence-badge">
           {todo.recurrence.label === "固定周期"
@@ -660,7 +587,7 @@ type ErrandRowProps = {
   errand: Errand;
   writable: boolean;
   onToggle: (errand: Errand) => void;
-  onRename: (errand: Errand, title: string) => void;
+  reorder: ReorderRow;
   onDelete: (errand: Errand) => void;
   onClocks: (
     errand: Errand,
@@ -673,30 +600,11 @@ function ErrandRow({
   errand,
   writable,
   onToggle,
-  onRename,
+  reorder,
   onDelete,
   onClocks,
 }: ErrandRowProps) {
   const voided = isVoidedErrand(errand, writable);
-  const [editing, setEditing] = useState(false);
-  const [title, setTitle] = useState(errand.title);
-
-  useEffect(() => {
-    setTitle(errand.title);
-  }, [errand.title]);
-
-  function finish(save: boolean): void {
-    if (!editing) {
-      return;
-    }
-    setEditing(false);
-    if (save) {
-      onRename(errand, title);
-    } else {
-      setTitle(errand.title);
-    }
-  }
-
   const className =
     errand.status === "completed"
       ? "todo done"
@@ -705,7 +613,8 @@ function ErrandRow({
         : "todo";
 
   return (
-    <li className={className}>
+    <li className={className} data-item-id={errand.id} {...reorder.attributes}>
+      {reorder.handle}
       {voided ? (
         <span className="badge">已作废</span>
       ) : (
@@ -717,41 +626,9 @@ function ErrandRow({
           aria-label={errand.title}
         />
       )}
-      {editing && writable && !voided ? (
-        <input
-          className="title-input"
-          value={title}
-          onChange={(event) => setTitle(event.target.value)}
-          onBlur={() => finish(true)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              finish(true);
-            }
-            if (event.key === "Escape") {
-              finish(false);
-            }
-          }}
-          maxLength={200}
-          aria-label="改标题"
-          autoFocus
-        />
-      ) : voided ? (
-        <span className="title">{errand.title}</span>
-      ) : (
-        <button
-          type="button"
-          className="title"
-          disabled={!writable}
-          onClick={() => {
-            if (writable) {
-              setEditing(true);
-            }
-          }}
-        >
-          {errand.title}
-        </button>
-      )}
+      <button type="button" className="title" onClick={() => openItemEditor({ id: errand.id, kind: "errand", title: errand.title, notes: errand.notes, writable: writable && !voided })}>
+        {errand.title}<NotesMark notes={errand.notes} />
+      </button>
       {errand.recurrence ? (
         <span className="badge recurrence-badge">
           {errand.recurrence.label === "固定周期"

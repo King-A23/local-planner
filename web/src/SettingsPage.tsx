@@ -1,3 +1,4 @@
+import { GlobalShortcutSettings } from "./GlobalShortcutSettings";
 import { useEffect, useRef, useState } from "react";
 import { errorMessage, type Backup, type Launcher, type LauncherCheck, settingsRequest } from "./api";
 import { ThemeSwitcher } from "./ThemeSwitcher";
@@ -239,7 +240,11 @@ export function SettingsPage({ onClose }: { onClose?: () => void }) {
             </select>
           </div>
           <p className="settings-caption">{newlineLabel} 换行。输入法确认文字时不会发送。选择后立即生效。</p>
+          <GlobalShortcutSettings />
           <dl className="settings-keyboard-list">
+            <div><dt>搜索事项</dt><dd><kbd>⌘ / Ctrl + K</kbd></dd></div>
+            <div><dt>保存事项详情</dt><dd><kbd>⌘ / Ctrl + Enter</kbd></dd></div>
+            <div><dt>调整列表顺序（聚焦拖动柄）</dt><dd><kbd>⌥ / Alt + ↑ ↓</kbd></dd></div>
             <div><dt>快速新增事项</dt><dd><kbd>⌘ N</kbd></dd></div>
             <div><dt>打开设置</dt><dd><kbd>⌘ ,</kbd></dd></div>
             <div><dt>切换今天 / 待办 / 定期事项</dt><dd><kbd>⌘ 1 / 2 / 3</kbd></dd></div>

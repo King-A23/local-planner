@@ -1,12 +1,24 @@
 import AppKit
 import WebKit
+import Carbon
 
-final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate, WKScriptMessageHandler {
+final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate, WKScriptMessageHandler, NSTextFieldDelegate {
     private var window: NSWindow!
     private var webView: WKWebView!
     private var settingsWindow: NSWindow?
     private var settingsWebView: WKWebView?
     private var pendingSettingsFragment: String?
+    private var entryPanel: NSPanel?
+    private var entryTitle: NSTextField?
+    private var entryDestination: NSSegmentedControl?
+    private var entrySave: NSButton?
+    private var entryStatus: NSTextField?
+    private var entryBusy = false
+    private var hotKey: EventHotKeyRef?
+    private var hotKeyHandler: EventHandlerRef?
+    private var shortcutStatus = ""
+    private var quickEntryMenuItem: NSMenuItem?
+    private var quickShortcut: String { UserDefaults.standard.string(forKey: "quickEntryShortcut") ?? "ctrl-option-space" }
     private var backend: Process?
     private let lifetime = Pipe()
     private var output: Pipe?
@@ -36,6 +48,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         buildMenu()
         buildWindow()
         startBackend()
+        installQuickEntryShortcut()
     }
 
     private func buildWindow() {
@@ -92,6 +105,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         add(app, "退出 Local Planner", #selector(NSApplication.terminate(_:)), "q")
         let file = menu("文件")
         add(file, "新增事项", #selector(quickAdd), "n", target: self)
+        let entryItem = NSMenuItem(title: "快速录入…", action: #selector(showQuickEntry), keyEquivalent: "")
+        entryItem.target = self
+        quickEntryMenuItem = entryItem
+        file.addItem(entryItem)
         file.addItem(.separator())
         add(file, "打开数据文件夹", #selector(showData), target: self)
         add(file, "打开运行日志", #selector(showLog), target: self)
@@ -104,6 +121,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             add(edit, title, Selector(action), key)
         }
         let view = menu("显示")
+        add(view, "搜索事项…", #selector(searchItems), "k", target: self)
         add(view, "今天", #selector(goToday), "1", target: self)
         add(view, "待办", #selector(goInventory), "2", target: self)
         add(view, "定期事项", #selector(goRecurrences), "3", target: self)
@@ -263,6 +281,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             showSettings(fragment: body["fragment"] as? String)
         case "closeSettings":
             if source === settingsWebView { settingsWindow?.performClose(nil) }
+        case "getQuickShortcut":
+            sendShortcutState(to: source)
+        case "setQuickShortcut":
+            if let value = body["value"] as? String { configureShortcut(value); sendShortcutState(to: source) }
         case "settingsChanged":
             guard let event = body["event"] as? String,
                   ["planner:restored", "planner:launchers-changed", "planner:theme-changed", "planner:shortcuts-changed"].contains(event),
@@ -386,7 +408,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         NSApp.terminate(nil)
     }
 
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         window?.makeKeyAndOrderFront(nil)
@@ -396,6 +418,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         if quitting { return .terminateLater }
         quitting = true
+        if let hotKey { UnregisterEventHotKey(hotKey) }
+        if let hotKeyHandler { RemoveEventHandler(hotKeyHandler) }
         startupTimer?.invalidate()
         try? lifetime.fileHandleForWriting.close()
         guard let process = backend, process.isRunning else { return .terminateNow }
@@ -405,6 +429,158 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             NSApp.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater
+    }
+
+    private func installQuickEntryShortcut() {
+        var event = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
+        let status = InstallEventHandler(GetApplicationEventTarget(), { _, event, context in
+            guard let context, let event else { return OSStatus(eventNotHandledErr) }
+            var id = EventHotKeyID()
+            let status = GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil,
+                                           MemoryLayout<EventHotKeyID>.size, nil, &id)
+            guard status == noErr, id.signature == 0x4C504C4E, id.id == 1 else { return OSStatus(eventNotHandledErr) }
+            let delegate = Unmanaged<AppDelegate>.fromOpaque(context).takeUnretainedValue()
+            delegate.showQuickEntry()
+            return noErr
+        }, 1, &event, Unmanaged.passUnretained(self).toOpaque(), &hotKeyHandler)
+        guard status == noErr else { shortcutStatus = "快捷键暂时不可用，可通过「文件 → 快速录入」打开。"; return }
+        configureShortcut(quickShortcut)
+    }
+
+    private func configureShortcut(_ value: String) {
+        guard ["ctrl-option-space", "ctrl-shift-space", "off"].contains(value) else { return }
+        if value == "off" {
+            if let hotKey { UnregisterEventHotKey(hotKey) }
+            hotKey = nil
+        } else {
+            if value == quickShortcut && hotKey != nil { shortcutStatus = ""; return }
+            guard hotKeyHandler != nil else { shortcutStatus = "快捷键暂时不可用，可通过「文件 → 快速录入」打开。"; return }
+            var next: EventHotKeyRef?
+            let modifiers = UInt32(controlKey | (value == "ctrl-option-space" ? optionKey : shiftKey))
+            let result = RegisterEventHotKey(UInt32(kVK_Space), modifiers,
+                EventHotKeyID(signature: 0x4C504C4E, id: 1), GetApplicationEventTarget(), OptionBits(kEventHotKeyExclusive), &next)
+            guard result == noErr else {
+                shortcutStatus = hotKey == nil ? "快捷键已被占用，请选择另一组；也可从「文件」菜单录入。" : "这组快捷键已被占用，已保留原设置。"
+                return
+            }
+            if let hotKey { UnregisterEventHotKey(hotKey) }
+            hotKey = next
+        }
+        quickEntryMenuItem?.keyEquivalent = value == "off" ? "" : " "
+        quickEntryMenuItem?.keyEquivalentModifierMask = value == "ctrl-shift-space" ? [.control, .shift] : [.control, .option]
+        UserDefaults.standard.set(value, forKey: "quickEntryShortcut")
+        shortcutStatus = ""
+    }
+
+    private func sendShortcutState(to view: WKWebView) {
+        let state: [String: Any] = ["value": quickShortcut, "message": shortcutStatus, "active": hotKey != nil]
+        guard let data = try? JSONSerialization.data(withJSONObject: state), let json = String(data: data, encoding: .utf8) else { return }
+        view.evaluateJavaScript("window.dispatchEvent(new CustomEvent('planner:quick-shortcut-state', {detail: \(json)}))")
+    }
+
+    @objc private func showQuickEntry() {
+        guard baseURL != nil, !quitting, !failed else { return }
+        if entryPanel == nil {
+            let panel = QuickEntryPanel(contentRect: NSRect(x: 0, y: 0, width: 540, height: 182),
+                styleMask: [.titled, .closable, .nonactivatingPanel], backing: .buffered, defer: false)
+            panel.title = "快速录入 · Local Planner"
+            panel.isReleasedWhenClosed = false
+            panel.level = .floating
+            panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+            panel.hidesOnDeactivate = false
+            panel.onCancel = { [weak self] in self?.closeQuickEntry() }
+            let content = NSView()
+            panel.contentView = content
+            let title = NSTextField(string: "")
+            title.placeholderString = "先记下一件事…"
+            title.font = .systemFont(ofSize: 19)
+            title.bezelStyle = .roundedBezel
+            title.delegate = self
+            let destination = NSSegmentedControl(labels: ["待办", "今天"], trackingMode: .selectOne, target: nil, action: nil)
+            destination.selectedSegment = 0
+            destination.setAccessibilityLabel("添加到")
+            let save = NSButton(title: "添加", target: self, action: #selector(submitQuickEntry))
+            save.bezelStyle = .rounded
+            let status = NSTextField(wrappingLabelWithString: "")
+            status.font = .systemFont(ofSize: 12)
+            status.textColor = .secondaryLabelColor
+            for view in [title, destination, save, status] {
+                view.translatesAutoresizingMaskIntoConstraints = false
+                content.addSubview(view)
+            }
+            NSLayoutConstraint.activate([
+                title.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 24),
+                title.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -24),
+                title.topAnchor.constraint(equalTo: content.topAnchor, constant: 24),
+                title.heightAnchor.constraint(equalToConstant: 44),
+                destination.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+                destination.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 16),
+                save.trailingAnchor.constraint(equalTo: title.trailingAnchor),
+                save.centerYAnchor.constraint(equalTo: destination.centerYAnchor),
+                save.widthAnchor.constraint(equalToConstant: 76),
+                status.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+                status.trailingAnchor.constraint(equalTo: title.trailingAnchor),
+                status.topAnchor.constraint(equalTo: destination.bottomAnchor, constant: 10),
+                status.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor, constant: -10)
+            ])
+            entryPanel = panel; entryTitle = title; entryDestination = destination; entrySave = save; entryStatus = status
+        }
+        if entryPanel?.isVisible != true { entryPanel?.center() }
+        entryPanel?.makeKeyAndOrderFront(nil)
+        if !entryBusy { entryPanel?.makeFirstResponder(entryTitle) }
+    }
+
+    private func closeQuickEntry() {
+        guard !entryBusy else { return }
+        entryPanel?.orderOut(nil)
+    }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        guard control === entryTitle, !textView.hasMarkedText() else { return false }
+        if commandSelector == #selector(NSResponder.cancelOperation(_:)) { closeQuickEntry(); return true }
+        if commandSelector == #selector(NSResponder.insertNewline(_:)) { submitQuickEntry(); return true }
+        return false
+    }
+
+    private func setEntryBusy(_ busy: Bool) {
+        entryBusy = busy
+        entryTitle?.isEnabled = !busy
+        entryDestination?.isEnabled = !busy
+        entrySave?.isEnabled = !busy
+        entrySave?.title = busy ? "添加中…" : "添加"
+        entryPanel?.standardWindowButton(.closeButton)?.isEnabled = !busy
+    }
+
+    @objc private func submitQuickEntry() {
+        guard !entryBusy, let baseURL, let field = entryTitle else { return }
+        if let editor = field.currentEditor() as? NSTextView, editor.hasMarkedText() { return }
+        let title = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else { field.becomeFirstResponder(); return }
+        guard title.count <= 200 else { entryStatus?.stringValue = "标题最长 200 字。"; return }
+        var request = URLRequest(url: baseURL.appendingPathComponent("api/quick-entry"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 30
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["title": title, "destination": entryDestination?.selectedSegment == 1 ? "today" : "inventory"])
+        entryStatus?.stringValue = ""
+        setEntryBusy(true)
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            let json = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.setEntryBusy(false)
+                if (200..<300).contains(status), error == nil {
+                    self.entryTitle?.stringValue = ""
+                    self.entryStatus?.stringValue = ""
+                    self.entryPanel?.orderOut(nil)
+                    self.webView?.evaluateJavaScript("window.dispatchEvent(new Event('planner:items-changed'))")
+                } else {
+                    self.entryStatus?.stringValue = json?["message"] as? String ?? "未能确认保存，请先检查列表再重试。输入已保留。"
+                    self.entryPanel?.makeFirstResponder(self.entryTitle)
+                }
+            }
+        }.resume()
     }
 
     private func navigate(_ path: String, fragment: String? = nil) {
@@ -425,6 +601,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             }
         }
     }
+    @objc private func searchItems() {
+        window?.makeKeyAndOrderFront(nil)
+        webView?.evaluateJavaScript("window.dispatchEvent(new Event('planner:search'))")
+    }
     @objc private func goToday() { navigate("") }
     @objc private func goInventory() { navigate("inventory") }
     @objc private func goRecurrences() { navigate("recurrences") }
@@ -438,6 +618,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     @objc private func resetZoom() { activeWebView?.pageZoom = 1 }
     @objc private func showData() { NSWorkspace.shared.open(dataDirectory) }
     @objc private func showLog() { NSWorkspace.shared.open(dataDirectory.appendingPathComponent("desktop.log")) }
+}
+
+final class QuickEntryPanel: NSPanel {
+    var onCancel: (() -> Void)?
+    override var canBecomeKey: Bool { true }
+    override func cancelOperation(_ sender: Any?) { onCancel?() }
 }
 
 let application = NSApplication.shared

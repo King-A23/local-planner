@@ -130,7 +130,6 @@ def test_day_view_has_errand_column_not_on_inventory() -> None:
     assert "addErrandOnDay" in day_view
     assert "completeErrand" in day_view
     assert "uncompleteErrand" in day_view
-    assert "renameErrand" in day_view
     assert "deleteErrand" in day_view
     assert "/api/days/${date}/errands" in api
     assert "/api/errands/${errandId}/complete" in api
@@ -272,8 +271,6 @@ def test_reorder_ui_uses_existing_order_apis() -> None:
     assert "reorderErrands" in api
     assert "/api/days/${date}/todos/order" in api
     assert "/api/days/${date}/errands/order" in api
-    assert "reorderTodos" not in day_view
-    assert "reorderErrands" not in day_view
     assert 'aria-label="Move up"' not in day_view
     assert 'aria-label="Move down"' not in day_view
     assert "onMoveTodo" not in day_view

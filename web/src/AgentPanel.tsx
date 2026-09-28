@@ -133,7 +133,7 @@ export function AgentPanel({ open, onClose, onOpen, triggerRef, surface, date, o
   useEffect(() => {
     if (!open) return;
     function onKey(event: KeyboardEvent) {
-      if (event.key === "Escape" && !event.defaultPrevented) {
+      if (event.key === "Escape" && !event.defaultPrevented && !document.querySelector("dialog[open]")) {
         setShowMenu(false);
         onClose();
         triggerRef.current?.focus();
