@@ -1,4 +1,4 @@
-type SettingsEvent = "planner:launchers-changed" | "planner:restored" | "planner:theme-changed";
+type SettingsEvent = "planner:launchers-changed" | "planner:restored" | "planner:theme-changed" | "planner:shortcuts-changed";
 
 declare global {
   interface Window {

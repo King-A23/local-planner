@@ -51,6 +51,8 @@ http://127.0.0.1:8787
 
 开发：`LOCAL_PLANNER_DEV=1 python -m local_planner serve` 可无 dist（只开 API）；另开终端 `cd web && npm i && npm run dev`，Vite 把 `/api` 代理到 `8787`。`LOCAL_PLANNER_DEV=1` 时数据目录是仓库内 `.data/`（已 gitignore），并允许 Vite `5173` Origin。
 
+验证：后端运行 `pytest`；前端在 `web/` 运行 `npm test`（输入法与发送快捷键回归测试，使用 Node.js 24 的原生 TypeScript 支持）和 `npm run build`（类型检查与打包）。
+
 ## 备份
 
 桌面应用进入「设置 → 数据与备份」，可立即备份、下载备份文件或确认恢复。每天首次使用时自动备份，保留最近 14 份；恢复前会再保存一份当前数据。详情见 [第一批用户的使用体验](docs/product/first-users.md)。

@@ -265,7 +265,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             if source === settingsWebView { settingsWindow?.performClose(nil) }
         case "settingsChanged":
             guard let event = body["event"] as? String,
-                  ["planner:restored", "planner:launchers-changed", "planner:theme-changed"].contains(event),
+                  ["planner:restored", "planner:launchers-changed", "planner:theme-changed", "planner:shortcuts-changed"].contains(event),
                   let data = try? JSONSerialization.data(withJSONObject: body),
                   let json = String(data: data, encoding: .utf8) else { return }
             let other = source === settingsWebView ? webView : settingsWebView

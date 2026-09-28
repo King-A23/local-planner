@@ -1,8 +1,10 @@
 import { useEffect, useRef } from "react";
 import authorAvatar from "./assets/king-a23-avatar.jpg";
 import { DISPLAY_NAME } from "./constants";
+import { useSendShortcut } from "./useSendShortcut";
 
 export function HelpAndAbout() {
+  const { sendLabel, newlineLabel } = useSendShortcut();
   const helpRef = useRef<HTMLDetailsElement>(null);
   const aboutRef = useRef<HTMLDetailsElement>(null);
 
@@ -35,7 +37,7 @@ export function HelpAndAbout() {
         <ol className="help-steps">
           <li>在「今天」写下一件想做的事，按回车添加。</li>
           <li>做完后勾选。点击标题可修改，更多操作在「···」里。</li>
-          <li>误删时，点击页面底部的「撤销」；提示会保留 30 秒。</li>
+          <li>误删时，点击页面底部的「撤销」；提示在 3 秒后自动消失。</li>
         </ol>
 
         <h3>事情放在哪里？</h3>
@@ -69,8 +71,9 @@ export function HelpAndAbout() {
         <h3>常用快捷键</h3>
         <dl className="help-shortcuts">
           <div><dt><kbd>⌘ N</kbd></dt><dd>快速新增事项</dd></div>
-          <div><dt><kbd>Enter</kbd></dt><dd>添加事项 / 发送助手指令</dd></div>
-          <div><dt><kbd>Shift + Enter</kbd></dt><dd>助手指令换行</dd></div>
+          <div><dt><kbd>Enter</kbd></dt><dd>添加事项</dd></div>
+          <div><dt><kbd>{sendLabel}</kbd></dt><dd>发送助手指令（可在「快捷键」中更改）</dd></div>
+          <div><dt><kbd>{newlineLabel}</kbd></dt><dd>助手指令换行</dd></div>
           <div><dt><kbd>⌘ ,</kbd></dt><dd>打开设置（桌面版）</dd></div>
           <div><dt><kbd>⌘ 1 / 2 / 3</kbd></dt><dd>今天 / 待办 / 定期事项（桌面版）</dd></div>
         </dl>

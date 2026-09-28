@@ -3,6 +3,8 @@ import { createPortal } from "react-dom";
 import { errorMessage, settingsRequest, type LauncherCheck } from "./api";
 import { navigate } from "./route";
 import { useAutoGrowingComposer } from "./useAutoGrowingComposer";
+import { ComposerKeyboard } from "./composerKeyboard";
+import { useSendShortcut } from "./useSendShortcut";
 
 type Launcher = { id: string; name: string; command: string };
 type Receipt = {
@@ -55,6 +57,8 @@ export function AgentPanel({ open, onClose, onOpen, triggerRef, surface, date, o
   const [configRevision, setConfigRevision] = useState(0);
   const promptRef = useRef<HTMLTextAreaElement>(null);
   const composerRef = useRef<HTMLFormElement>(null);
+  const keyboard = useRef(new ComposerKeyboard());
+  const { shortcut, sendLabel, newlineLabel } = useSendShortcut();
   const actionRef = useRef(false);
   const requestRef = useRef<{ key: string; id: string } | null>(null);
   const notifiedRef = useRef("");
@@ -242,12 +246,20 @@ export function AgentPanel({ open, onClose, onOpen, triggerRef, surface, date, o
             aria-describedby="agent-input-hint" rows={1} value={prompt}
             disabled={pending || (active && !paused)} placeholder={items.length ? "写下要助手做的事…" : "请先配置计划助手"}
             onFocus={onOpen}
+            onBlur={() => keyboard.current.reset()}
+            onCompositionStart={() => keyboard.current.compositionStart()}
+            onCompositionEnd={() => keyboard.current.compositionEnd(performance.now())}
+            onKeyUp={(event) => keyboard.current.keyUp(event.key)}
             onChange={(event) => setPrompt(event.target.value)}
             onKeyDown={(event) => {
-              if (event.nativeEvent.isComposing || event.keyCode === 229) return;
-              if (event.key === "Enter" && !event.shiftKey) {
+              const action = keyboard.current.keyDown(event.nativeEvent, shortcut, performance.now());
+              if (action === "ime") {
+                // Let the input method commit/cancel, without triggering app shortcuts.
+                event.stopPropagation();
+              } else if (action === "suppress" || action === "send") {
                 event.preventDefault();
-                if (!active) send();
+                event.stopPropagation();
+                if (action === "send" && !active) send();
               }
             }} />
           <div className="agent-pill-control agent-pill-model-btn" title="选择计划助手">
@@ -258,12 +270,12 @@ export function AgentPanel({ open, onClose, onOpen, triggerRef, surface, date, o
             </select>
           </div>
           {!active && <button type="submit" className="agent-pill-control agent-pill-btn-send"
-            aria-label={checking ? "检测中…" : pending ? "正在提交…" : "发送指令"} title="发送指令"
+            aria-label={checking ? "检测中…" : pending ? "正在提交…" : "发送指令"} title={`发送指令（${sendLabel}）`}
             disabled={!synced || pending || checking || Boolean(blocked) || !selected || !prompt.trim()}>
             {checking || pending ? <span className="agent-pill-spinner" aria-hidden="true" /> : <span aria-hidden="true">↑</span>}
           </button>}
         </form>
-        <p id="agent-input-hint" className="agent-input-hint">{paused ? "修改后点击继续 · Shift+Enter 换行" : "Enter 发送 · Shift+Enter 换行"}</p>
+        <p id="agent-input-hint" className="agent-input-hint">{paused ? "修改后点击继续" : `${sendLabel} 发送`} · {newlineLabel} 换行</p>
         {!active && <p className="agent-privacy-note">发送会将指令和计划上下文交给所选助手。<button type="button" className="linkish quiet" onClick={() => { onClose(); navigate("/settings"); }}>设置</button></p>}
       </div>
     </aside>, document.body,

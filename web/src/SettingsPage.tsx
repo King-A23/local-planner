@@ -4,10 +4,13 @@ import { ThemeSwitcher } from "./ThemeSwitcher";
 import { HelpAndAbout } from "./HelpAndAbout";
 import { notifySettingsChange } from "./desktop";
 import { navigate } from "./route";
+import { parseSendShortcut } from "./composerKeyboard";
+import { useSendShortcut } from "./useSendShortcut";
 
 const BACKUP_LABELS: Record<string, string> = { auto: "自动备份", manual: "手动备份", "before-restore": "恢复前备份", imported: "导入的备份", migration: "升级前备份" };
 
 export function SettingsPage({ onClose }: { onClose?: () => void }) {
+  const { shortcut, choose: chooseShortcut, modifierLabel, newlineLabel } = useSendShortcut();
   const [backups, setBackups] = useState<Backup[]>([]);
   const [items, setItems] = useState<Launcher[]>([]);
   const [selected, setSelected] = useState("");
@@ -162,6 +165,17 @@ export function SettingsPage({ onClose }: { onClose?: () => void }) {
       </details>
     </section>
 
+    <section className="settings-section" aria-labelledby="shortcuts-title">
+      <h2 id="shortcuts-title">快捷键</h2>
+      <div className="settings-actions">
+        <label htmlFor="send-shortcut">发送助手指令</label>
+        <select id="send-shortcut" value={shortcut} onChange={(event) => chooseShortcut(parseSendShortcut(event.target.value))}>
+          <option value="enter">Enter 发送</option>
+          <option value="mod-enter">{modifierLabel} 发送</option>
+        </select>
+      </div>
+      <p className="settings-caption">{newlineLabel} 换行。输入法确认文字时不会发送。选择后立即生效。</p>
+    </section>
     <section className="settings-section"><div className="settings-inline"><h2>外观</h2><ThemeSwitcher /></div></section>
     <HelpAndAbout />
   </main>;
