@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { errorMessage, settingsRequest, type LauncherCheck } from "./api";
 import { navigate } from "./route";
+import { useAutoGrowingComposer } from "./useAutoGrowingComposer";
 
 type Launcher = { id: string; name: string; command: string };
 type Receipt = {
@@ -53,6 +54,7 @@ export function AgentPanel({ open, onClose, onOpen, triggerRef, surface, date, o
   const [checking, setChecking] = useState(false);
   const [configRevision, setConfigRevision] = useState(0);
   const promptRef = useRef<HTMLTextAreaElement>(null);
+  const composerRef = useRef<HTMLFormElement>(null);
   const actionRef = useRef(false);
   const requestRef = useRef<{ key: string; id: string } | null>(null);
   const notifiedRef = useRef("");
@@ -62,6 +64,7 @@ export function AgentPanel({ open, onClose, onOpen, triggerRef, surface, date, o
   const paused = run?.status === "paused";
   const edited = Boolean(run && prompt.trim() !== run.prompt);
   const blocked = environment && ["missing", "invalid", "login_required"].includes(environment.status);
+  useAutoGrowingComposer(composerRef, promptRef);
 
   useEffect(() => {
     if (!open || !selected || active) return;
@@ -95,10 +98,6 @@ export function AgentPanel({ open, onClose, onOpen, triggerRef, surface, date, o
   useEffect(() => {
     if (open) promptRef.current?.focus();
   }, [open]);
-  useEffect(() => {
-    const field = promptRef.current;
-    if (field) { field.style.height = "auto"; field.style.height = `${Math.min(160, Math.max(44, field.scrollHeight))}px`; }
-  }, [prompt, open]);
   useEffect(() => {
     let stopped = false;
     let timer: number;
@@ -235,27 +234,36 @@ export function AgentPanel({ open, onClose, onOpen, triggerRef, surface, date, o
           <div className="agent-plus-menu-header">试着这样说</div>
           {["把待办中的「任务名称」加入今天", "今天下午三点开始「任务名称」", "每周五安排「任务名称」"].map((example) => <button key={example} type="button" className="agent-plus-menu-item" onClick={() => { setPrompt(example); setShowMenu(false); promptRef.current?.focus(); }}>{example}</button>)}
         </div>}
-        <form className="agent-composer" onSubmit={(event) => { event.preventDefault(); send(); }}>
-          <textarea ref={promptRef} id="agent-prompt" aria-label={paused ? "调整执行指令" : "给计划助手的指令"} rows={1} value={prompt}
+        <form ref={composerRef} className="agent-pill-bar" onSubmit={(event) => { event.preventDefault(); send(); }}>
+          <button type="button" className={`agent-pill-control agent-pill-btn-plus${showMenu ? " is-active" : ""}`}
+            disabled={active || pending} aria-label="指令示例" title="指令示例" aria-expanded={showMenu}
+            onClick={() => setShowMenu((value) => !value)}>+</button>
+          <textarea ref={promptRef} className="agent-pill-input" id="agent-prompt" aria-label={paused ? "调整执行指令" : "给计划助手的指令"}
+            aria-describedby="agent-input-hint" rows={1} value={prompt}
             disabled={pending || (active && !paused)} placeholder={items.length ? "写下要助手做的事…" : "请先配置计划助手"}
             onFocus={onOpen}
             onChange={(event) => setPrompt(event.target.value)}
             onKeyDown={(event) => {
-              if (event.nativeEvent.isComposing) return;
+              if (event.nativeEvent.isComposing || event.keyCode === 229) return;
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();
                 if (!active) send();
               }
             }} />
-          <div className="agent-composer-tools">
-            <button type="button" className="linkish quiet" disabled={active || pending} aria-expanded={showMenu} onClick={() => setShowMenu((value) => !value)}>示例</button>
-            <select aria-label="选择计划助手" value={selected} disabled={active || pending} onChange={(event) => setSelected(event.target.value)}>
+          <div className="agent-pill-control agent-pill-model-btn" title="选择计划助手">
+            <span className="agent-pill-model-name" aria-hidden="true">{items.find((item) => item.id === selected)?.name ?? "选择助手"}</span>
+            <span className="agent-pill-model-chevron" aria-hidden="true">⌄</span>
+            <select className="agent-pill-select-native" aria-label="选择计划助手" value={selected} disabled={active || pending || !items.length} onChange={(event) => setSelected(event.target.value)}>
               {items.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
             </select>
-            <span className="agent-input-hint">{paused ? "修改后点击继续" : "Enter 发送 · Shift+Enter 换行"}</span>
-            {!active && <button type="submit" className="button-primary" disabled={!synced || pending || checking || Boolean(blocked) || !selected || !prompt.trim()}>{checking ? "检测中…" : pending ? "正在提交…" : "发送"}</button>}
           </div>
+          {!active && <button type="submit" className="agent-pill-control agent-pill-btn-send"
+            aria-label={checking ? "检测中…" : pending ? "正在提交…" : "发送指令"} title="发送指令"
+            disabled={!synced || pending || checking || Boolean(blocked) || !selected || !prompt.trim()}>
+            {checking || pending ? <span className="agent-pill-spinner" aria-hidden="true" /> : <span aria-hidden="true">↑</span>}
+          </button>}
         </form>
+        <p id="agent-input-hint" className="agent-input-hint">{paused ? "修改后点击继续 · Shift+Enter 换行" : "Enter 发送 · Shift+Enter 换行"}</p>
         {!active && <p className="agent-privacy-note">发送会将指令和计划上下文交给所选助手。<button type="button" className="linkish quiet" onClick={() => { onClose(); navigate("/settings"); }}>设置</button></p>}
       </div>
     </aside>, document.body,
