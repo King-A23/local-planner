@@ -40,6 +40,8 @@ class UnitOfWork(Protocol):
 
     def get_day(self, d: CalendarDate) -> DayRecord | None: ...
 
+    def list_days_after(self, d: CalendarDate) -> list[DayRecord]: ...
+
     def save_day(self, day: DayRecord) -> None: ...
 
     def get_entry(self, day: CalendarDate, task_id: TaskId) -> DayTaskEntry | None: ...
@@ -132,6 +134,9 @@ class InMemoryUnitOfWork:
 
     def get_day(self, d: CalendarDate) -> DayRecord | None:
         return self._days.get(d)
+
+    def list_days_after(self, d: CalendarDate) -> list[DayRecord]:
+        return sorted((day for day in self._days.values() if day.date > d), key=lambda day: day.date)
 
     def save_day(self, day: DayRecord) -> None:
         self._days[day.date] = day

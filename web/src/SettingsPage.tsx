@@ -2,7 +2,7 @@ import { GlobalShortcutSettings } from "./GlobalShortcutSettings";
 import { useEffect, useRef, useState } from "react";
 import { errorMessage, type Backup, type Launcher, type LauncherCheck, settingsRequest } from "./api";
 import { ThemeSwitcher } from "./ThemeSwitcher";
-import { AboutAuthor, UsageGuide } from "./HelpAndAbout";
+import { AboutAuthor, UsageGuide, AssistantUsage, CommonShortcuts } from "./HelpAndAbout";
 import { notifySettingsChange } from "./desktop";
 import { navigate } from "./route";
 import { parseSendShortcut } from "./composerKeyboard";
@@ -193,7 +193,8 @@ export function SettingsPage({ onClose }: { onClose?: () => void }) {
         </section>
 
         <section className="settings-section" {...panelProps("assistant")}>
-          <p className="muted">用一句话添加或调整计划。你也可以一直手动记录。</p>
+          <p className="muted">用一句话添加、改期、补充备注或整理顺序。</p>
+          <details className="settings-details"><summary>助手可以帮我做什么？</summary><AssistantUsage /></details>
           <div className="settings-actions">
             <select aria-label="配置哪个助手" value={selected} disabled={busy || !items.length} onChange={(event) => choose(event.target.value)}>
               {!items.length && <option value="">尚未添加助手</option>}
@@ -241,15 +242,7 @@ export function SettingsPage({ onClose }: { onClose?: () => void }) {
           </div>
           <p className="settings-caption">{newlineLabel} 换行。输入法确认文字时不会发送。选择后立即生效。</p>
           <GlobalShortcutSettings />
-          <dl className="settings-keyboard-list">
-            <div><dt>搜索事项</dt><dd><kbd>⌘ / Ctrl + K</kbd></dd></div>
-            <div><dt>保存事项详情</dt><dd><kbd>⌘ / Ctrl + Enter</kbd></dd></div>
-            <div><dt>调整列表顺序（聚焦拖动柄）</dt><dd><kbd>⌥ / Alt + ↑ ↓</kbd></dd></div>
-            <div><dt>快速新增事项</dt><dd><kbd>⌘ N</kbd></dd></div>
-            <div><dt>打开设置</dt><dd><kbd>⌘ ,</kbd></dd></div>
-            <div><dt>切换今天 / 待办 / 定期事项</dt><dd><kbd>⌘ 1 / 2 / 3</kbd></dd></div>
-            <div><dt>收起计划助手</dt><dd><kbd>Esc</kbd></dd></div>
-          </dl>
+          <CommonShortcuts />
         </section>
         <section className="settings-section" {...panelProps("help")}>{section === "help" && <UsageGuide />}</section>
         <section className="settings-section" {...panelProps("about")}>{section === "about" && <AboutAuthor />}</section>

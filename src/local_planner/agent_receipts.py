@@ -25,6 +25,7 @@ class _TaskState:
     start_clock: str | None = None
     end_clock: str | None = None
     target_date: str | None = None
+    notes: str | None = None
 
 
 @dataclass(frozen=True)
@@ -35,6 +36,7 @@ class _ErrandState:
     date: str | None
     start_clock: str | None = None
     end_clock: str | None = None
+    notes: str | None = None
 
 
 @dataclass(frozen=True)
@@ -69,7 +71,9 @@ _TYPE_ORDER = {
     "renamed": 10,
     "clock_changed": 11,
     "target_date_changed": 12,
-    "deleted": 13,
+    "notes_changed": 13,
+    "order_changed": 14,
+    "deleted": 15,
 }
 
 _SUMMARY_LABELS = {
@@ -91,6 +95,8 @@ _SUMMARY_LABELS = {
     "renamed": "改名",
     "clock_changed": "改时钟",
     "target_date_changed": "改目标日",
+    "notes_changed": "更新备注",
+    "order_changed": "调整排序",
     "deleted": "删除",
 }
 
@@ -130,6 +136,7 @@ def build_agent_receipt(before: Context, after: Context) -> dict[str, Any]:
             )
         )
 
+    changes.extend(_diff_orders(before, after))
     changes.sort(
         key=lambda change: (
             _TYPE_ORDER[change["type"]],
@@ -164,6 +171,7 @@ def _task_states(context: Context) -> dict[str, _TaskState]:
             completed=bool(row.get("completedOnDay", False)),
             start_clock=_optional_text(row.get("startClock")),
             end_clock=_optional_text(row.get("endClock")),
+            notes=_optional_text(row.get("notes")),
         )
     for row in _rows(context, "inventory"):
         task_id = _required_id(row, "taskId")
@@ -173,6 +181,7 @@ def _task_states(context: Context) -> dict[str, _TaskState]:
             location="todo",
             date=None,
             target_date=_optional_text(row.get("targetDate")),
+            notes=_optional_text(row.get("notes")),
         )
     for row in _rows(context, "scheduledAhead"):
         task_id = _required_id(row, "taskId")
@@ -181,7 +190,17 @@ def _task_states(context: Context) -> dict[str, _TaskState]:
             title=_text(row.get("title")),
             location="scheduled",
             date=_optional_text(row.get("date")),
+            notes=_optional_text(row.get("notes")),
         )
+    for day in _rows(context, "daysAhead"):
+        for row in _rows(day, "todos"):
+            task_id = _required_id(row, "taskId")
+            states[task_id] = _TaskState(
+                task_id=task_id, title=_text(row.get("title")), location="scheduled",
+                date=_optional_text(day.get("date")), completed=bool(row.get("completedOnDay", False)),
+                start_clock=_optional_text(row.get("startClock")), end_clock=_optional_text(row.get("endClock")),
+                notes=_optional_text(row.get("notes")),
+            )
     return states
 
 
@@ -197,6 +216,7 @@ def _errand_states(context: Context) -> dict[str, _ErrandState]:
             date=today,
             start_clock=_optional_text(row.get("startClock")),
             end_clock=_optional_text(row.get("endClock")),
+            notes=_optional_text(row.get("notes")),
         )
     for row in _rows(context, "errandsAhead"):
         errand_id = _required_id(row, "id")
@@ -207,6 +227,7 @@ def _errand_states(context: Context) -> dict[str, _ErrandState]:
             date=_optional_text(row.get("date")),
             start_clock=_optional_text(row.get("startClock")),
             end_clock=_optional_text(row.get("endClock")),
+            notes=_optional_text(row.get("notes")),
         )
     return states
 
@@ -358,8 +379,8 @@ def _diff_task(
             )
         )
 
-    if old.completed is not None and new.completed is not None:
-        if old.completed is False and new.completed is True:
+    if new.completed is not None:
+        if old.completed is not True and new.completed is True:
             changes.append(
                 _change("completed", "plan", new.task_id, new.title, date=new.date)
             )
@@ -390,7 +411,7 @@ def _diff_task(
     # unschedule/reschedule would turn an intentionally hidden value into a false
     # clock edit, so only compare the same visible appearance.
     if (
-        old.location == new.location == "plan"
+        old.location == new.location and new.location in ("plan", "scheduled")
         and old.date == new.date
         and (old.start_clock, old.end_clock) != (new.start_clock, new.end_clock)
     ):
@@ -427,6 +448,8 @@ def _diff_task(
                 after=new.target_date,
             )
         )
+    if old.notes is not None and new.notes is not None and old.notes != new.notes:
+        changes.append(_change("notes_changed", _task_entity(new), new.task_id, new.title))
     return changes
 
 
@@ -506,6 +529,39 @@ def _diff_errand(
                 },
             )
         )
+    if old.notes is not None and new.notes is not None and old.notes != new.notes:
+        changes.append(_change("notes_changed", "errand", new.errand_id, new.title))
+    return changes
+
+
+def _orders(context: Context) -> dict[tuple[str, str], tuple[bool, list[str]]]:
+    days = [dict(context, date=context.get("today")), *_rows(context, "daysAhead")]
+    result = {}
+    for day in days:
+        date = _optional_text(day.get("date"))
+        if date is None:
+            continue
+        for rows, key, field in (("todos", "taskId", "manualTodoOrder"), ("errands", "id", "manualErrandOrder")):
+            if field in day:
+                result[(date, rows)] = (bool(day[field]), [_required_id(row, key) for row in _rows(day, rows)])
+    return result
+
+
+def _diff_orders(before: Context, after: Context) -> list[dict[str, Any]]:
+    old_orders, new_orders = _orders(before), _orders(after)
+    changes = []
+    for date, kind in sorted(old_orders.keys() & new_orders.keys()):
+        old_manual, old_ids = old_orders[(date, kind)]
+        new_manual, new_ids = new_orders[(date, kind)]
+        shared = set(old_ids) & set(new_ids)
+        # Adding/removing rows and automatic clock sorting are not manual reorders.
+        changed = new_manual and [i for i in old_ids if i in shared] != [i for i in new_ids if i in shared]
+        if old_manual != new_manual or changed:
+            changes.append(_change(
+                "order_changed", "plan-list" if kind == "todos" else "errand-list", f"{date}:{kind}",
+                f"{date} 的{'计划' if kind == 'todos' else '零碎事项'}", date=date,
+                before={"manual": old_manual, "ids": old_ids}, after={"manual": new_manual, "ids": new_ids},
+            ))
     return changes
 
 

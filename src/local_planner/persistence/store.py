@@ -133,6 +133,13 @@ class SqliteUnitOfWork:
             (day.date, day.status, day.sealed_at, day.manual_todo_order, day.manual_errand_order),
         )
 
+    def list_days_after(self, d: CalendarDate) -> list[DayRecord]:
+        rows = self.conn.execute(
+            "SELECT date, status, sealed_at, manual_todo_order, manual_errand_order FROM days WHERE date > ? ORDER BY date",
+            (d,),
+        ).fetchall()
+        return [_day_from_row(row) for row in rows]
+
     def get_entry(self, day: CalendarDate, task_id: TaskId) -> DayTaskEntry | None:
         row = self.conn.execute(
             "SELECT e.day_date, e.task_id, e.title_snapshot, e.notes_snapshot, e.sort_order, "

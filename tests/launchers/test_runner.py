@@ -68,6 +68,37 @@ def test_default_opencode_template_is_stored(tmp_path):
     assert added.name in names
 
 
+def test_launcher_delivers_capabilities_and_executable_notes_example(tmp_path, monkeypatch):
+    import shlex
+
+    monkeypatch.setenv("LOCAL_PLANNER_ALLOW_CLOCK_OVERRIDE", "1")
+    monkeypatch.setenv("LOCAL_PLANNER_CLOCK", FROZEN)
+    root = tmp_path / "data with spaces"
+    root.mkdir()
+    uow = SqliteUnitOfWork.open(root / "planner.sqlite")
+    with uow.transaction():
+        Planner(FrozenClock(FROZEN), uow).add_todo_on_day("2026-08-31", "写报告")
+    uow.close()
+    stub = tmp_path / "notes_agent.py"
+    stub.write_text('''import json, os, shlex, subprocess
+from pathlib import Path
+context = json.loads(Path(os.environ["LOCAL_PLANNER_CONTEXT_FILE"]).read_text())
+assert "task.edit" in {c["name"] for c in context["capabilities"]["commands"]}
+line = next(line for line in os.environ["LOCAL_PLANNER_PROMPT"].splitlines() if line.startswith("- 备注示例："))
+args = shlex.split(line.split("：", 1)[1])
+args[args.index("TASK_ID")] = context["todos"][0]["taskId"]
+subprocess.run(args, check=True)
+''')
+    monkeypatch.chdir(tmp_path)
+    result = run_launcher(
+        Launcher("notes", "Notes", shlex.join([sys.executable, str(stub), "{prompt}"])),
+        "给写报告补充备注：带上实验材料", clock=FrozenClock(FROZEN), data_root=root,
+    )
+    assert result.ok, result.stderr
+    row = json.loads(result.stdout)["data"]["todos"][0]
+    assert row["title"] == "写报告" and row["notes"] == "带上实验材料"
+
+
 def test_expand_keeps_prompt_as_one_argv():
     argv = expand_command(
         "opencode run -m nassa-deepseek/deepseek-v4-flash {prompt}",

@@ -21,17 +21,20 @@ Process:
 Agent (JSON on stdout):
   meta
   context
+  capabilities          Discover supported interaction commands and rules
+  search --query TEXT   Search unfinished titles and notes (up to 50 results)
   calendar --from DATE --to DATE
   day open [DATE]
   day todo add DATE --title TEXT [--start HH:MM] [--end HH:MM]
   day todo complete DATE TASK_ID
   day todo uncomplete DATE TASK_ID
-  day todo reorder DATE [TASK_ID ...]
+  day todo reorder DATE [TASK_ID ...] [--automatic]
   day todo time DATE TASK_ID [--start HH:MM] [--end HH:MM]
   day errand add DATE --title TEXT [--start HH:MM] [--end HH:MM]
-  day errand reorder DATE [ERRAND_ID ...]
+  day errand reorder DATE [ERRAND_ID ...] [--automatic]
   inventory list
   inventory add --title TEXT [--target-date DATE]
+  inventory complete TASK_ID
   recurrence list
   recurrence add --kind {plan,errand} --title TEXT --frequency {daily,weekly} [--weekdays mon,tue,...] --start-date DATE [--start HH:MM] [--end HH:MM]
   recurrence update SERIES_ID [fields ...]
@@ -40,15 +43,20 @@ Agent (JSON on stdout):
   task schedule TASK_ID --date DATE
   task unschedule TASK_ID
   task rename TASK_ID --title TEXT
+  task edit TASK_ID [--title TEXT] [--notes TEXT | --clear-notes] --expected-title TEXT --expected-notes TEXT
   task delete TASK_ID
   task target TASK_ID [--date DATE | --clear]
   errand complete ERRAND_ID
   errand uncomplete ERRAND_ID
   errand rename ERRAND_ID --title TEXT
+  errand edit ERRAND_ID [--title TEXT] [--notes TEXT | --clear-notes] --expected-title TEXT --expected-notes TEXT
   errand delete ERRAND_ID
   errand time ERRAND_ID [--start HH:MM] [--end HH:MM]
 
-DATE is YYYY-MM-DD or today. --pretty / --human apply to agent commands.
+DATE is YYYY-MM-DD, today or tomorrow (Asia/Shanghai server clock).
+Reorder requires every item ID, including completed items; --automatic takes no IDs.
+Edit preserves omitted fields and rejects stale expected values. Notes: at most 10000 characters.
+--pretty / --human apply to agent commands.
 """
     sys.stdout.write(text)
 

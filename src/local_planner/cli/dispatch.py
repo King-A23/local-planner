@@ -19,7 +19,9 @@ from local_planner.domain import commands as cmds
 from local_planner.domain.commands import UNSET
 from local_planner.domain.recurrence import UNSET as RECURRENCE_UNSET
 from local_planner.domain.errors import DaySealed, DomainError
-from local_planner.domain.models import parse_calendar_date
+from local_planner.domain.models import add_calendar_days, parse_calendar_date
+from local_planner.domain.search import search_items
+from local_planner.agent_contract import capabilities_payload
 from local_planner.paths import data_dir, db_path, resolve_clock
 from local_planner.present import (
     calendar_payload,
@@ -43,6 +45,8 @@ logger = logging.getLogger(__name__)
 def _resolve_date(token: str, today: str) -> str:
     if token == "today":
         return today
+    if token == "tomorrow":
+        return add_calendar_days(today, 1)
     return parse_calendar_date(token).isoformat()
 
 
@@ -80,6 +84,10 @@ def _run(args: Any, today: str, clock: Any, uow: Any) -> dict[str, Any]:
     command = args.envelope_command
     if command == "meta":
         return meta_payload(uow, today)
+    if command == "capabilities":
+        return capabilities_payload()
+    if command == "search":
+        return search_items(clock, uow, args.query)
     if command == "context":
         return context_payload(clock, uow, today)
     if command == "calendar":
@@ -117,8 +125,14 @@ def _run(args: Any, today: str, clock: Any, uow: Any) -> dict[str, Any]:
             today,
         )
     if command == "day.todo.reorder":
+        date = _resolve_date(args.date, today)
+        ids = args.task_ids
+        if args.automatic:
+            if ids:
+                raise UsageError("--automatic 不能同时指定事项 ID", command=command)
+            ids = [item.task_id for item in cmds.open_day(clock, uow, date).todos]
         return day_plan_payload(
-            cmds.reorder_todos(clock, uow, _resolve_date(args.date, today), args.task_ids),
+            cmds.reorder_todos(clock, uow, date, ids, manual=not args.automatic),
             today,
         )
     if command == "day.errand.add":
@@ -134,9 +148,15 @@ def _run(args: Any, today: str, clock: Any, uow: Any) -> dict[str, Any]:
             today,
         )
     if command == "day.errand.reorder":
+        date = _resolve_date(args.date, today)
+        ids = args.errand_ids
+        if args.automatic:
+            if ids:
+                raise UsageError("--automatic 不能同时指定事项 ID", command=command)
+            ids = [item.id for item in cmds.open_day(clock, uow, date).errands]
         return day_plan_payload(
             cmds.reorder_errands(
-                clock, uow, _resolve_date(args.date, today), args.errand_ids
+                clock, uow, date, ids, manual=not args.automatic
             ),
             today,
         )
@@ -153,6 +173,18 @@ def _run(args: Any, today: str, clock: Any, uow: Any) -> dict[str, Any]:
             cmds.add_to_inventory(clock, uow, args.title, target),
             today,
         )
+    if command == "inventory.complete":
+        return day_plan_payload(cmds.complete_inventory_task(clock, uow, args.task_id), today)
+    if command in ("task.edit", "errand.edit"):
+        if not (hasattr(args, "title") or hasattr(args, "notes") or args.clear_notes):
+            raise UsageError("至少提供 --title、--notes 或 --clear-notes", command=command)
+        kind = "task" if command == "task.edit" else "errand"
+        return command_payload(cmds.edit_details(
+            clock, uow, kind, getattr(args, f"{kind}_id"),
+            getattr(args, "title", args.expected_title),
+            "" if args.clear_notes else getattr(args, "notes", args.expected_notes),
+            args.expected_title, args.expected_notes,
+        ), today)
     if command == "recurrence.list":
         return {
             "items": [

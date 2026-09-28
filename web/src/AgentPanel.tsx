@@ -5,6 +5,7 @@ import { navigate } from "./route";
 import { useAutoGrowingComposer } from "./useAutoGrowingComposer";
 import { ComposerKeyboard } from "./composerKeyboard";
 import { useSendShortcut } from "./useSendShortcut";
+import { ASSISTANT_EXAMPLES } from "./assistantExamples";
 
 type Launcher = { id: string; name: string; command: string };
 type Receipt = {
@@ -231,7 +232,7 @@ export function AgentPanel({ open, onClose, onOpen, triggerRef, surface, date, o
         </div>}
         {showMenu && <div className="agent-plus-menu">
           <div className="agent-plus-menu-header">试着这样说</div>
-          {["把待办中的「任务名称」加入今天", "今天下午三点开始「任务名称」", "每周五安排「任务名称」"].map((example) => <button key={example} type="button" className="agent-plus-menu-item" onClick={() => { setPrompt(example); setShowMenu(false); promptRef.current?.focus(); }}>{example}</button>)}
+          {ASSISTANT_EXAMPLES.map((example) => <button key={example} type="button" className="agent-plus-menu-item" onClick={() => { setPrompt(example); setShowMenu(false); promptRef.current?.focus(); }}>{example}</button>)}
         </div>}
         <form ref={composerRef} className="agent-pill-bar" onSubmit={(event) => { event.preventDefault(); send(); }}>
           <button type="button" className={`agent-pill-control agent-pill-btn-plus${showMenu ? " is-active" : ""}`}
@@ -280,12 +281,12 @@ const CHANGE_LABELS: Record<string, string> = {
   recurrence_resumed: "恢复定期事项", recurrence_stopped: "停止定期事项", recurrence_deleted: "删除定期事项",
   plan_added: "新增计划", errand_added: "新增零碎事项", todo_added: "新增待办", todo_to_today: "加入今天",
   todo_scheduled: "安排到某天", moved_to_todo: "移回待办", rescheduled: "调整安排", completed: "完成",
-  completion_undone: "取消完成", renamed: "更新标题", clock_changed: "更新时间", target_date_changed: "更新目标日期", deleted: "删除",
+  notes_changed: "更新备注", order_changed: "调整排序", completion_undone: "取消完成", renamed: "更新标题", clock_changed: "更新时间", target_date_changed: "更新目标日期", deleted: "删除",
 };
 function AgentChangeReceipt({ receipt }: { receipt: Receipt }) {
   return <section className="agent-receipt" aria-label="计划改动">
     {receipt.summary && <p>{receipt.summary.replaceAll("To Do", "待办").replaceAll("Errand", "零碎事项").replaceAll("Plan", "计划")}</p>}
-    {(receipt.changes ?? []).length > 0 && <ul>{receipt.changes?.map((change, index) => <li key={change.id ?? index}>
+    {(receipt.changes ?? []).length > 0 && <ul>{receipt.changes?.map((change, index) => <li key={`${change.type ?? "change"}-${change.id ?? index}`}>
       {change.label ?? CHANGE_LABELS[change.type ?? ""] ?? "计划改动"}{change.count ? `（${change.count}）` : ""}{change.title ? `：${change.title}` : change.items?.length ? `：${change.items.join("、")}` : ""}
     </li>)}</ul>}
   </section>;

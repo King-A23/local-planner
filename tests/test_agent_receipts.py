@@ -20,6 +20,35 @@ def _context() -> dict:
     }
 
 
+def test_notes_receipts_cover_inventory_plan_and_errand_without_inventing_missing_values():
+    before = _context()
+    before["todos"] = [dict(_plan("p", "计划"), notes="")]
+    before["inventory"] = [dict(_todo("t", "待办"), notes="旧备注")]
+    before["errands"] = [dict(_errand("e", "小事"), notes="内容")]
+    after = deepcopy(before)
+    after["todos"][0]["notes"] = "补充"
+    after["inventory"][0]["notes"] = ""
+    after["errands"][0]["notes"] = "新的内容"
+    receipt = build_agent_receipt(before, after)
+    assert receipt["counts"] == {"notes_changed": 3}
+    assert {change["entity"] for change in receipt["changes"]} == {"plan", "todo", "errand"}
+    del before["todos"][0]["notes"]
+    assert build_agent_receipt(before, after)["counts"] == {"notes_changed": 2}
+
+
+def test_order_receipts_ignore_added_removed_members_and_automatic_clock_order():
+    before = _context()
+    before["manualTodoOrder"] = False
+    before["todos"] = [_plan("a", "甲"), _plan("b", "乙")]
+    after = deepcopy(before)
+    after["todos"].reverse()
+    assert not build_agent_receipt(before, after)["changed"]
+    before["manualTodoOrder"] = after["manualTodoOrder"] = True
+    assert build_agent_receipt(before, after)["counts"] == {"order_changed": 1}
+    after["todos"] = [_plan("a", "甲"), _plan("new", "新事项")]
+    assert "order_changed" not in build_agent_receipt(before, after)["counts"]
+
+
 def _todo(task_id: str, title: str, target: str | None = None) -> dict:
     return {
         "taskId": task_id,

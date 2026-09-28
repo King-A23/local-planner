@@ -32,6 +32,17 @@ def _leaf(sub: argparse._SubParsersAction[DomainParser], name: str, envelope: st
     return parser
 
 
+def _edit(sub: argparse._SubParsersAction[DomainParser], kind: str) -> None:
+    edit = _leaf(sub, "edit", f"{kind}.edit")
+    edit.add_argument(f"{kind}_id")
+    edit.add_argument("--title", default=argparse.SUPPRESS)
+    notes = edit.add_mutually_exclusive_group()
+    notes.add_argument("--notes", default=argparse.SUPPRESS, help="替换完整备注；多行文本需作为一个参数")
+    notes.add_argument("--clear-notes", action="store_true")
+    edit.add_argument("--expected-title", required=True, help="最近读取的原始标题，用于冲突检查")
+    edit.add_argument("--expected-notes", required=True, help="最近读取的原始备注；空备注传空字符串")
+
+
 def build_domain_parser() -> DomainParser:
     parser = DomainParser(
         prog="python -m local_planner",
@@ -44,6 +55,9 @@ def build_domain_parser() -> DomainParser:
 
     _leaf(top, "meta", "meta")
     _leaf(top, "context", "context")
+    _leaf(top, "capabilities", "capabilities")
+    search = _leaf(top, "search", "search")
+    search.add_argument("--query", required=True, help="按标题和备注搜索未完成事项，最多 200 字")
 
     calendar = _leaf(top, "calendar", "calendar")
     calendar.add_argument("--from", dest="date_from", required=True)
@@ -71,6 +85,7 @@ def build_domain_parser() -> DomainParser:
     todo_reorder = _leaf(todo_sub, "reorder", "day.todo.reorder")
     todo_reorder.add_argument("date")
     todo_reorder.add_argument("task_ids", nargs="*")
+    todo_reorder.add_argument("--automatic", action="store_true", help="恢复按时间排序，不传 ID")
 
     errand = _leaf(day_sub, "errand", "day.errand.add")
     errand_sub = errand.add_subparsers(dest="errand_cmd", required=True, parser_class=DomainParser)
@@ -82,6 +97,7 @@ def build_domain_parser() -> DomainParser:
     errand_reorder = _leaf(errand_sub, "reorder", "day.errand.reorder")
     errand_reorder.add_argument("date")
     errand_reorder.add_argument("errand_ids", nargs="*")
+    errand_reorder.add_argument("--automatic", action="store_true", help="恢复按时间排序，不传 ID")
 
     inventory = _leaf(top, "inventory", "inventory.list")
     inv_sub = inventory.add_subparsers(dest="inv_cmd", required=True, parser_class=DomainParser)
@@ -89,6 +105,8 @@ def build_domain_parser() -> DomainParser:
     inv_add = _leaf(inv_sub, "add", "inventory.add")
     inv_add.add_argument("--title", required=True)
     inv_add.add_argument("--target-date", dest="target_date", default=None)
+    inv_complete = _leaf(inv_sub, "complete", "inventory.complete")
+    inv_complete.add_argument("task_id", help="直接完成待办，记入服务端今天的完成记录")
 
     recurrence = _leaf(top, "recurrence", "recurrence.list")
     recurrence_sub = recurrence.add_subparsers(
@@ -125,6 +143,7 @@ def build_domain_parser() -> DomainParser:
 
     task = _leaf(top, "task", "task.schedule")
     task_sub = task.add_subparsers(dest="task_cmd", required=True, parser_class=DomainParser)
+    _edit(task_sub, "task")
     task_sched = _leaf(task_sub, "schedule", "task.schedule")
     task_sched.add_argument("task_id")
     task_sched.add_argument("--date", required=True)
@@ -149,6 +168,7 @@ def build_domain_parser() -> DomainParser:
     errand_top_sub = errand_top.add_subparsers(
         dest="errand_top_cmd", required=True, parser_class=DomainParser
     )
+    _edit(errand_top_sub, "errand")
     errand_complete = _leaf(errand_top_sub, "complete", "errand.complete")
     errand_complete.add_argument("errand_id")
     errand_uncomplete = _leaf(errand_top_sub, "uncomplete", "errand.uncomplete")

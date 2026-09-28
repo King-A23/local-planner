@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from local_planner.clock import Clock
+from local_planner.agent_contract import capabilities_payload
 from local_planner.domain.errors import ValidationError
 from local_planner.domain.models import (
     DayPlan,
@@ -246,9 +247,19 @@ def context_payload(clock: Clock, uow: UnitOfWork, today: str) -> dict[str, Any]
         }
         for item in uow.list_errands_after(today)
     ]
+    # Read existing snapshots only: context must not generate future occurrences.
+    days_ahead = [day_plan_payload(DayPlan(
+        date=record.date, status=record.status, sealed_at=record.sealed_at,
+        todos=uow.list_entries(record.date), errands=uow.list_errands(record.date),
+        manual_todo_order=record.manual_todo_order,
+        manual_errand_order=record.manual_errand_order,
+    ), today) for record in uow.list_days_after(today)]
     return {
         "today": today,
         "timezone": "Asia/Shanghai",
+        "capabilities": capabilities_payload(),
+        "manualTodoOrder": day["manualTodoOrder"],
+        "manualErrandOrder": day["manualErrandOrder"],
         "writable": day["writable"],
         "status": day["status"],
         "lastSettledDate": uow.meta.get("last_settled_date"),
@@ -258,6 +269,7 @@ def context_payload(clock: Clock, uow: UnitOfWork, today: str) -> dict[str, Any]
         "inventory": [inventory_item_payload(item) for item in inventory],
         "scheduledAhead": ahead,
         "errandsAhead": errands_ahead,
+        "daysAhead": days_ahead,
         "recurrences": [
             recurrence_payload(item, today) for item in uow.list_recurrences()
         ],

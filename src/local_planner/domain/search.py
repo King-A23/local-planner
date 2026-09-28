@@ -4,10 +4,13 @@ from __future__ import annotations
 from local_planner.clock import Clock
 from local_planner.domain.commands import is_day_writable, open_day
 from local_planner.domain.models import add_calendar_days
+from local_planner.domain.errors import ValidationError
 from local_planner.domain.store import UnitOfWork
 
 
 def search_items(clock: Clock, uow: UnitOfWork, query: str) -> dict:
+    if len(query) > 200:
+        raise ValidationError("搜索内容不能超过 200 字")
     today = clock.today()
     terms = query.casefold().split()
     if not terms:
