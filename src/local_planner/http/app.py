@@ -25,6 +25,7 @@ from local_planner.recovery import ensure_daily_backup
 from local_planner.launcher_health import check_launcher
 from local_planner.http.recovery_routes import mount_recovery
 from local_planner.http.goals_routes import mount_goals
+from local_planner.http.planning_routes import mount_planning
 from local_planner.agent_receipts import build_agent_receipt
 from local_planner.agent_runs import AgentRuns, RunControl
 from local_planner.clock import Clock
@@ -55,6 +56,7 @@ from local_planner.launchers import (
     delete_launcher,
     load_launchers,
     run_launcher,
+    run_planning_launcher,
     update_launcher,
 )
 from local_planner.runtime import InternalError, LockTimeout, interprocess_lock, planner_txn
@@ -121,6 +123,10 @@ class AgentRunBody(PromptBody):
     launcherId: str
     requestId: str = Field(min_length=1, max_length=100)
     prompt: str = Field(min_length=1, max_length=10000)
+    mode: Literal["execution", "planning"] = "execution"
+    draftId: str | None = None
+    selectedPhaseId: str | None = None
+    expectedDraftRevision: int | None = Field(default=None, ge=1)
 
 
 class RecurrenceCreateBody(BaseModel):
@@ -271,6 +277,22 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_app):
+        # A draft run is persisted so its conversation survives restart, while
+        # the subprocess supervisor is intentionally in-memory.  If no other
+        # process owns the shared lease, mark an orphaned persisted run as
+        # interrupted before serving requests.
+        try:
+            with interprocess_lock(data_dir / "agent-execution", timeout=0):
+                from local_planner.domain.planning import interrupt_draft_runs
+                # Do not use _locked/planner_txn here: starting a server must
+                # not settle yesterday merely because a persisted agent run is
+                # being recovered.  Some serve tests intentionally retain an
+                # already-closed app after the runner returns, so a failed
+                # best-effort orphan check is also harmless.
+                with uow.transaction():
+                    interrupt_draft_runs(clock, uow)
+        except (LockTimeout, sqlite3.Error):
+            pass
         yield
         runs.close()
 
@@ -844,6 +866,23 @@ def create_app(
             return {}
         _locked(ctx, validate)
 
+    def _validate_planning_run(body: AgentRunBody) -> None:
+        """Validate the lightweight request shape before taking the run lease."""
+        if body.mode != "planning":
+            return
+        if body.surface not in {"goals", "goal"}:
+            raise ValidationError("规划助手只能从规划页面启动")
+        if not body.draftId or body.expectedDraftRevision is None:
+            raise ValidationError("规划草案已过期，请刷新后重试")
+        _validate_agent_surface(body)
+        def check_scope(_today):
+            from local_planner.domain.planning import get_draft
+            draft = get_draft(ctx.uow, body.draftId)
+            if draft["scopeGoalId"] != body.goalId:
+                raise ValidationError("草案不属于当前规划页面")
+            return {}
+        _locked(ctx, check_scope)
+
     def execute_agent(launcher_id: str, body: PromptBody, control: RunControl | None = None) -> dict[str, Any]:
         items = load_launchers(ctx.data_dir)
         found = next((item for item in items if item.id == launcher_id), None)
@@ -893,6 +932,126 @@ def create_app(
             "stderr": result.stderr,
         }
 
+    def execute_planning_agent(launcher_id: str, body: AgentRunBody, control: RunControl) -> dict[str, Any]:
+        """Generate a draft in an isolated launcher workspace.
+
+        ``begin_draft_run`` is deliberately inside the worker: AgentRuns has
+        acquired the cross-window lease by then, so persisted run state cannot
+        claim an agent is running when it never got ownership of the process.
+        """
+        from local_planner.domain.planning import begin_draft_run, finish_draft_run
+
+        items = load_launchers(ctx.data_dir)
+        found = next((item for item in items if item.id == launcher_id), None)
+        if found is None:
+            raise NotFound("找不到该启动器")
+        assert body.draftId is not None
+        assert body.expectedDraftRevision is not None
+        try:
+            started = _locked(
+                ctx,
+                lambda _today: begin_draft_run(
+                    ctx.clock,
+                    ctx.uow,
+                    body.draftId,
+                    expected_revision=body.expectedDraftRevision,
+                    recovery_generation=body.recoveryGeneration,
+                    prompt=body.prompt,
+                    request_id=body.requestId,
+                    selected_phase_id=body.selectedPhaseId,
+                ),
+            )
+        except DomainError as exc:
+            # A stale draft is a normal multi-turn conflict.  Return its
+            # concrete reason and its latest persisted version instead of
+            # turning it into the generic worker-failure message.
+            from local_planner.domain.planning import get_draft
+            try:
+                draft = _locked(ctx, lambda _today: get_draft(ctx.uow, body.draftId or ""))
+            except DomainError:
+                draft = None
+            return {
+                "ok": False, "status": "failed", "message": exc.message,
+                "draft": draft, "argv": [], "returncode": None,
+                "stdout": "", "stderr": "",
+            }
+        result, plan_result = run_planning_launcher(
+            found,
+            body.prompt,
+            planning_context=started,
+            timeout=600,
+            data_root=ctx.data_dir,
+            scope_goal_id=started.get("scopeGoalId"),
+            selected_phase_id=started.get("selectedPhaseId"),
+            control=control,
+        )
+        stopped = control.cancelled
+        try:
+            if stopped:
+                finished = _locked(
+                    ctx,
+                    lambda _today: finish_draft_run(
+                        ctx.clock, ctx.uow, body.draftId or "",
+                        request_id=body.requestId,
+                        recovery_generation=body.recoveryGeneration,
+                        error="已停止本次规划。",
+                        stopped=True,
+                    ),
+                )
+                status, message = "stopped", "已停止本次规划，之前的草案已保留。"
+            elif not result.ok or plan_result is None:
+                detail = result.stderr.strip() or "助手没有返回可用的规划结果。"
+                finished = _locked(
+                    ctx,
+                    lambda _today: finish_draft_run(
+                        ctx.clock, ctx.uow, body.draftId or "",
+                        request_id=body.requestId,
+                        recovery_generation=body.recoveryGeneration,
+                        error=detail,
+                    ),
+                )
+                status, message = "failed", "规划未完成，之前的草案已保留。"
+            else:
+                kwargs: dict[str, Any] = {}
+                if "document" in plan_result:
+                    kwargs["document"] = plan_result["document"]
+                    kwargs["message"] = plan_result.get("message")
+                else:
+                    kwargs["question"] = plan_result["question"]
+                finished = _locked(
+                    ctx,
+                    lambda _today: finish_draft_run(
+                        ctx.clock, ctx.uow, body.draftId or "",
+                        request_id=body.requestId,
+                        recovery_generation=body.recoveryGeneration,
+                        **kwargs,
+                    ),
+                )
+                status, message = "succeeded", plan_result.get("message") or plan_result.get("question")
+        except DomainError as exc:
+            # Invalid model output is a failed draft run, not a failed app
+            # request.  Persist the reason and retain the last valid draft.
+            finished = _locked(
+                ctx,
+                lambda _today: finish_draft_run(
+                    ctx.clock, ctx.uow, body.draftId or "",
+                    request_id=body.requestId,
+                    recovery_generation=body.recoveryGeneration,
+                    error=exc.message,
+                ),
+            )
+            status, message = "failed", "规划结果无法应用，之前的草案已保留。"
+        return {
+            "ok": status == "succeeded",
+            "status": status,
+            "message": message,
+            "draft": finished,
+            "argv": result.argv,
+            "returncode": result.returncode,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+        }
+
     @app.post("/api/launchers/{launcher_id}/run")
     def run_agent(launcher_id: str, body: PromptBody) -> dict[str, Any]:
         # Legacy synchronous callers also participate in the one-run lease.
@@ -910,9 +1069,19 @@ def create_app(
     def start_agent(body: AgentRunBody) -> dict[str, Any]:
         if not body.prompt.strip():
             raise ValidationError("请先写下要助手做的事")
-        _validate_agent_surface(body)
+        _validate_planning_run(body)
+        if body.mode == "execution":
+            _validate_agent_surface(body)
         if not any(item.id == body.launcherId for item in load_launchers(ctx.data_dir)):
             raise NotFound("找不到该启动器")
+        if body.mode == "planning":
+            return runs.start(
+                body.requestId, body.launcherId, body.prompt,
+                lambda control: execute_planning_agent(body.launcherId, body, control),
+                surface=body.surface, date=body.date, goal_id=body.goalId,
+                mode="planning", draft_id=body.draftId,
+                selected_phase_id=body.selectedPhaseId,
+            )
         return runs.start(body.requestId, body.launcherId, body.prompt,
                           lambda control: execute_agent(body.launcherId, body, control),
                           surface=body.surface, date=body.date, goal_id=body.goalId)
@@ -930,6 +1099,7 @@ def create_app(
         return runs.control(run_id, action)
 
     mount_goals(app, ctx, _locked)
+    mount_planning(app, ctx, _locked)
     mount_recovery(app, ctx, PLANNER_LOCK)
 
     if dist_dir is not None:

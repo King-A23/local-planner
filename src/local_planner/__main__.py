@@ -34,6 +34,8 @@ Agent (JSON on stdout):
   day errand add DATE --title TEXT [--start HH:MM] [--end HH:MM]
   day errand reorder DATE [ERRAND_ID ...] [--automatic]
   day errand move DATE ERRAND_ID (--first | --last | --before ERRAND_ID | --after ERRAND_ID)
+  goal list|show|create|edit|state|set-parent|phase|action ...
+  planning list|show|create|update|undo|apply|discard|revert ...
   inventory list
   inventory add --title TEXT [--target-date DATE]
   inventory complete TASK_ID

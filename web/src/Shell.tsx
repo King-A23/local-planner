@@ -66,7 +66,7 @@ export function Shell({
             aria-current={activeSection === "goals" ? "page" : undefined}
             onClick={(e) => handleNavClick(e, "/goals")}
           >
-            目标
+            规划
           </a>
           <button
             type="button"

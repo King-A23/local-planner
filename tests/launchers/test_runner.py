@@ -12,12 +12,44 @@ from local_planner.launchers import (
     expand_command,
     load_launchers,
     run_launcher,
+    run_planning_launcher,
 )
 from local_planner.persistence import SqliteUnitOfWork
 from local_planner.domain.commands import Planner
 
 FROZEN = "2026-08-31T08:00:00+08:00"
 STUB = Path(__file__).resolve().parent / "echo_stub.py"
+
+
+def test_planning_runner_uses_isolated_root_and_strict_result_file(tmp_path, monkeypatch):
+    proof = tmp_path / "planning-proof.json"
+    monkeypatch.setenv("PLANNING_PROOF", str(proof))
+    launcher_script = tmp_path / "planning-stub.py"
+    launcher_script.write_text(
+        '''import json, os
+from pathlib import Path
+context = json.loads(Path(os.environ["LOCAL_PLANNER_CONTEXT_FILE"]).read_text())
+result = Path(os.environ["LOCAL_PLANNER_PLAN_RESULT_FILE"])
+Path(os.environ["LOCAL_PLANNER_DATA_DIR"]).joinpath("isolated-write").write_text("ok")
+Path(os.environ["PLANNING_PROOF"]).write_text(json.dumps({"context": context, "data": os.environ["LOCAL_PLANNER_DATA_DIR"], "result": str(result), "prompt": os.environ["LOCAL_PLANNER_PROMPT"]}))
+result.write_text(json.dumps({"document": {"goals": []}, "message": "draft ready"}))
+''',
+        encoding="utf-8",
+    )
+    result, payload = run_planning_launcher(
+        Launcher("planning", "planning", f"{sys.executable} {launcher_script}"),
+        "规划我的学习路径",
+        planning_context={"scopeGoalId": None, "selectedPhaseId": None, "document": {"goals": []}},
+        data_root=tmp_path / "live-data",
+    )
+    assert result.ok is True
+    assert payload == {"document": {"goals": []}, "message": "draft ready"}
+    captured = json.loads(proof.read_text(encoding="utf-8"))
+    assert captured["context"]["document"] == {"goals": []}
+    assert captured["data"] != str((tmp_path / "live-data").resolve())
+    assert captured["result"].endswith("plan-result.json")
+    assert '"open"、"done" 或 "skipped"' in captured["prompt"]
+    assert "当前阶段用 goal.focusPhaseId" in captured["prompt"]
 
 
 def test_runner_passes_prompt_and_context(tmp_path, monkeypatch):

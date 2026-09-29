@@ -91,8 +91,25 @@ export type GoalPhase = {
   goalId: string;
   title: string;
   notes: string;
+  /** The result this stage should make true; unlike notes it is shown on the roadmap. */
+  outcome: string;
+  /** An optional human time label, for example “本学期”. */
+  horizonText: string;
   position: number;
   status: GoalPhaseStatus;
+};
+
+export type GoalAction = {
+  id: string;
+  goalId: string;
+  phaseId: string | null;
+  title: string;
+  notes: string;
+  position: number;
+  taskId: string | null;
+  scheduledDate: string | null;
+  completed: boolean;
+  discarded: boolean;
 };
 
 export type Goal = {
@@ -100,9 +117,12 @@ export type Goal = {
   title: string;
   notes: string;
   horizonText: string;
+  /** A single, optional goal this goal contributes to. */
+  parentGoalId: string | null;
   state: GoalState;
   endReason: GoalEndReason;
   nextTaskId: string | null;
+  nextActionId: string | null;
   focusPhaseId: string | null;
   revision: number;
   createdAt: string;
@@ -110,6 +130,7 @@ export type Goal = {
   endedAt: string | null;
   phases: GoalPhase[];
   tasks: GoalTask[];
+  actions: GoalAction[];
 };
 
 export type GoalList = {
@@ -264,7 +285,14 @@ export type GoalActionInput = {
     | "add-phase"
     | "edit-phase"
     | "focus-phase"
-    | "reorder-phases";
+    | "reorder-phases"
+    | "set-parent"
+    | "add-action"
+    | "edit-action"
+    | "remove-action"
+    | "next-action"
+    | "materialize-action"
+    | "link-action";
   expectedRevision: number;
   recoveryGeneration: string | null;
   [key: string]: unknown;
@@ -278,6 +306,46 @@ export function changeGoal(
     method: "POST",
     body: JSON.stringify(input),
   }).then((r) => readJson<Goal & Pick<GoalList, "serverToday" | "recoveryGeneration">>(r));
+}
+
+export type PlanningDraftStatus = "editing" | "applied" | "discarded";
+export type PlanningDocument = { goals: Array<Partial<Goal> & { id: string; phases?: GoalPhase[]; actions?: GoalAction[] }> };
+export type PlanningDraft = {
+  id: string;
+  scopeGoalId?: string | null;
+  selectedPhaseId?: string | null;
+  status: PlanningDraftStatus;
+  runStatus?: "idle" | "running" | "interrupted" | "failed" | "stopped" | "succeeded";
+  revision: number;
+  recoveryGeneration: string | null;
+  document: PlanningDocument;
+  baseGoalRevisions: Record<string, number>;
+  baseDocument?: PlanningDocument;
+  changes?: Array<{ kind: "goal" | "phase" | "action"; id: string; goalId: string; type: "added" | "modified" | "removed"; title: string }>;
+  canUndo?: boolean;
+  canRevert?: boolean;
+  runRequestId?: string | null;
+  lastError?: string | null;
+  conversation?: Array<{ role: "user" | "assistant"; content: string; createdAt?: string }>;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export function listPlanningDrafts(goalId?: string): Promise<{ items: PlanningDraft[]; serverToday: string; recoveryGeneration: string | null }> {
+  const query = goalId ? `?goalId=${encodeURIComponent(goalId)}` : "";
+  return fetch(`/api/planning/drafts${query}`).then((r) => readJson<{ items: PlanningDraft[]; serverToday: string; recoveryGeneration: string | null }>(r));
+}
+
+export function getPlanningDraft(id: string): Promise<PlanningDraft> {
+  return fetch(`/api/planning/drafts/${encodeURIComponent(id)}`).then((r) => readJson<PlanningDraft>(r));
+}
+
+export function createPlanningDraft(input: Record<string, unknown>): Promise<PlanningDraft> {
+  return jsonRequest("/api/planning/drafts", { method: "POST", body: JSON.stringify(input) }).then((r) => readJson<PlanningDraft>(r));
+}
+
+export function updatePlanningDraft(id: string, input: Record<string, unknown>): Promise<PlanningDraft> {
+  return jsonRequest(`/api/planning/drafts/${encodeURIComponent(id)}/actions`, { method: "POST", body: JSON.stringify(input) }).then((r) => readJson<PlanningDraft>(r));
 }
 
 export function getTodayPlanning(): Promise<TodayPlanning> {

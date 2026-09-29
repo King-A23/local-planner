@@ -120,6 +120,9 @@ class AgentRuns:
         surface: str = "today",
         date: str | None = None,
         goal_id: str | None = None,
+        mode: str = "execution",
+        draft_id: str | None = None,
+        selected_phase_id: str | None = None,
     ) -> dict:
         with self.lock:
             if self.closed:
@@ -132,6 +135,9 @@ class AgentRuns:
                         or run["surface"] != surface
                         or run["date"] != date
                         or run["goalId"] != goal_id
+                        or run["mode"] != mode
+                        or run["draftId"] != draft_id
+                        or run["selectedPhaseId"] != selected_phase_id
                     ):
                         raise Conflict("请求已提交，请刷新执行状态")
                     return self._payload(run)
@@ -147,7 +153,8 @@ class AgentRuns:
             control = RunControl()
             run = {"id": run_id, "requestId": request_id, "launcherId": launcher_id,
                    "prompt": prompt, "surface": surface, "date": date,
-                   "goalId": goal_id, "control": control, "result": None}
+                   "goalId": goal_id, "mode": mode, "draftId": draft_id,
+                   "selectedPhaseId": selected_phase_id, "control": control, "result": None}
             self.runs[run_id] = run
             while len(self.runs) > 20:
                 del self.runs[next(iter(self.runs))]
@@ -174,7 +181,7 @@ class AgentRuns:
     def _payload(self, run: dict) -> dict:
         control = run["control"]
         with control.lock:
-            return {key: run[key] for key in ("id", "requestId", "launcherId", "prompt", "surface", "date", "goalId", "result")} | {
+            return {key: run[key] for key in ("id", "requestId", "launcherId", "prompt", "surface", "date", "goalId", "mode", "draftId", "selectedPhaseId", "result")} | {
                 "status": control.status, "elapsedSeconds": round(control.elapsed(), 1),
             }
 

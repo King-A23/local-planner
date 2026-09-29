@@ -29,7 +29,8 @@ class GoalActionBody(BaseModel):
     operation: Literal[
         "edit", "state", "add-task", "link-task", "unlink-task", "next",
         "schedule-next", "add-phase", "edit-phase", "focus-phase",
-        "reorder-phases",
+        "reorder-phases", "set-parent", "add-action", "edit-action",
+        "remove-action", "next-action", "materialize-action", "link-action",
     ]
     expectedRevision: int = Field(ge=1)
     recoveryGeneration: str | None
@@ -43,9 +44,13 @@ class GoalActionBody(BaseModel):
     taskId: str | None = None
     phaseId: str | None = None
     expectedGoalId: str | None = None
-    expectedTaskId: str | None = None
     expectedScheduledDate: str | None = None
     phaseIds: list[str] | None = None
+    parentGoalId: str | None = None
+    actionId: str | None = None
+    outcome: str | None = None
+    destination: Literal["today", "inventory"] | None = None
+    expectedTaskId: str | None = None
 
 
 def _generation(ctx: Any) -> str | None:
@@ -100,6 +105,9 @@ def _action_values(body: GoalActionBody) -> dict[str, Any]:
         if state != "ended" and body.endReason is not None:
             raise ValidationError("只有结束目标时可以说明结束原因")
         return {"state": state, "end_reason": body.endReason}
+    if operation == "set-parent":
+        _only_fields(body, "parentGoalId")
+        return {"parent_goal_id": _required_nullable(body, "parentGoalId")}
     if operation == "add-task":
         _only_fields(body, "title", "notes", "phaseId", "requestId")
         return {
@@ -129,20 +137,30 @@ def _action_values(body: GoalActionBody) -> dict[str, Any]:
             "expected_scheduled_date": _required_nullable(body, "expectedScheduledDate"),
         }
     if operation == "add-phase":
-        _only_fields(body, "title", "notes", "requestId")
-        return {
+        _only_fields(body, "title", "notes", "outcome", "horizonText", "requestId")
+        result = {
             "title": _required_text(body, "title"),
             "notes": body.notes or "",
             "request_id": _required_text(body, "requestId"),
         }
+        if "outcome" in body.model_fields_set:
+            result["outcome"] = _required_text(body, "outcome")
+        if "horizonText" in body.model_fields_set:
+            result["horizon_text"] = _required_text(body, "horizonText")
+        return result
     if operation == "edit-phase":
-        _only_fields(body, "phaseId", "title", "notes", "status")
-        return {
+        _only_fields(body, "phaseId", "title", "notes", "status", "outcome", "horizonText")
+        result = {
             "phase_id": _required_text(body, "phaseId"),
             "title": _required_text(body, "title"),
             "notes": _required_text(body, "notes"),
             "status": _required_text(body, "status"),
         }
+        if "outcome" in body.model_fields_set:
+            result["outcome"] = _required_text(body, "outcome")
+        if "horizonText" in body.model_fields_set:
+            result["horizon_text"] = _required_text(body, "horizonText")
+        return result
     if operation == "focus-phase":
         _only_fields(body, "phaseId")
         return {"phase_id": _required_nullable(body, "phaseId")}
@@ -152,6 +170,28 @@ def _action_values(body: GoalActionBody) -> dict[str, Any]:
         if value is None:
             raise ValidationError("请求缺少必要字段")
         return {"phase_ids": value}
+    if operation == "add-action":
+        _only_fields(body, "title", "notes", "phaseId", "requestId")
+        return {"title": _required_text(body, "title"), "notes": body.notes or "",
+                "phase_id": body.phaseId, "request_id": _required_text(body, "requestId")}
+    if operation == "edit-action":
+        _only_fields(body, "actionId", "title", "notes", "phaseId")
+        return {"action_id": _required_text(body, "actionId"), "title": _required_text(body, "title"),
+                "notes": _required_text(body, "notes"), "phase_id": _required_nullable(body, "phaseId")}
+    if operation == "remove-action":
+        _only_fields(body, "actionId")
+        return {"action_id": _required_text(body, "actionId")}
+    if operation == "next-action":
+        _only_fields(body, "actionId")
+        return {"action_id": _required_nullable(body, "actionId")}
+    if operation == "materialize-action":
+        _only_fields(body, "actionId", "destination", "requestId")
+        return {"action_id": _required_text(body, "actionId"), "destination": _required_text(body, "destination"),
+                "request_id": _required_text(body, "requestId")}
+    if operation == "link-action":
+        _only_fields(body, "actionId", "taskId", "expectedTaskId")
+        return {"action_id": _required_text(body, "actionId"), "task_id": _required_text(body, "taskId"),
+                "expected_task_id": _required_nullable(body, "expectedTaskId")}
     raise ValidationError("未知目标操作")
 
 

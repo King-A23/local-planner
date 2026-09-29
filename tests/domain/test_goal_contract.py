@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from local_planner.clock import FrozenClock
-from local_planner.domain.commands import schedule_to_date
+from local_planner.domain.commands import add_to_inventory, complete_inventory_task, schedule_to_date
 from local_planner.domain.errors import Conflict
 from local_planner.domain.goals import change_goal, create_goal
 from local_planner.domain.store import InMemoryUnitOfWork
@@ -147,3 +147,71 @@ def test_scheduling_a_goal_task_captures_goal_and_phase_context_on_today() -> No
     assert entry.goal_title_snapshot == "通过 CSP"
     assert entry.phase_id_snapshot == phase.id
     assert entry.phase_title_snapshot == "基础"
+
+
+def test_roadmap_actions_materialize_once_and_can_be_scheduled_today() -> None:
+    uow = InMemoryUnitOfWork()
+    goal = _goal(uow)
+    goal = change_goal(
+        CLOCK, uow, goal.id, "add-action", expected_revision=goal.revision,
+        title="完成一套模拟题", notes="记录错题", phase_id=None, request_id="action-1",
+    )
+    action = uow.list_goal_actions(goal.id)[0]
+    goal = change_goal(
+        CLOCK, uow, goal.id, "next-action", expected_revision=goal.revision, action_id=action.id,
+    )
+    scheduled = change_goal(
+        CLOCK, uow, goal.id, "materialize-action", expected_revision=goal.revision,
+        action_id=action.id, destination="today", request_id="materialize-1",
+    )
+    linked = uow.get_goal_action(action.id)
+    assert linked.task_id is not None
+    assert uow.get_task(linked.task_id).current_scheduled_date == CLOCK.today()
+    assert scheduled.next_action_id is None
+    assert scheduled.next_task_id == linked.task_id
+
+    # A lost response retries without creating a second Task or touching revision.
+    assert change_goal(
+        CLOCK, uow, goal.id, "materialize-action", expected_revision=goal.revision,
+        action_id=action.id, destination="today", request_id="materialize-1",
+    ) == scheduled
+    assert len(uow.list_goal_tasks(goal.id)) == 1
+
+    # Selecting a materialized roadmap row is still the ordinary task next step.
+    selected = change_goal(
+        CLOCK, uow, goal.id, "next-action", expected_revision=scheduled.revision,
+        action_id=action.id,
+    )
+    assert selected.next_action_id is None
+    assert selected.next_task_id == linked.task_id
+
+
+def test_goal_parent_rejects_cycles() -> None:
+    uow = InMemoryUnitOfWork()
+    parent = _goal(uow)
+    child = create_goal(CLOCK, uow, "准备算法", request_id="child")
+    child = change_goal(CLOCK, uow, child.id, "set-parent", expected_revision=child.revision, parent_goal_id=parent.id)
+    assert child.parent_goal_id == parent.id
+    with pytest.raises(Exception, match="循环"):
+        change_goal(CLOCK, uow, parent.id, "set-parent", expected_revision=parent.revision, parent_goal_id=child.id)
+
+
+def test_linking_a_completed_task_clears_selected_candidate_instead_of_selecting_it() -> None:
+    uow = InMemoryUnitOfWork()
+    goal = _goal(uow)
+    goal = change_goal(
+        CLOCK, uow, goal.id, "add-action", expected_revision=goal.revision,
+        title="复盘模拟题", notes="", phase_id=None, request_id="candidate",
+    )
+    action = uow.list_goal_actions(goal.id)[0]
+    goal = change_goal(
+        CLOCK, uow, goal.id, "next-action", expected_revision=goal.revision, action_id=action.id,
+    )
+    task = add_to_inventory(CLOCK, uow, "已完成的复盘").task
+    complete_inventory_task(CLOCK, uow, task.id)
+    linked = change_goal(
+        CLOCK, uow, goal.id, "link-action", expected_revision=goal.revision,
+        action_id=action.id, task_id=task.id, expected_task_id=task.id,
+    )
+    assert linked.next_action_id is None
+    assert linked.next_task_id is None

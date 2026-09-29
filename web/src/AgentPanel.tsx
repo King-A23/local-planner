@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
-import { errorMessage, settingsRequest, type LauncherCheck } from "./api";
+import { errorMessage, settingsRequest, type LauncherCheck, type PlanningDraft } from "./api";
 import { navigate } from "./route";
 import { useAutoGrowingComposer } from "./useAutoGrowingComposer";
 import { ComposerKeyboard } from "./composerKeyboard";
@@ -15,7 +15,8 @@ type Receipt = {
 type Run = {
   id: string; requestId: string; launcherId: string; prompt: string;
   status: string; elapsedSeconds: number; surface: "today" | "todo" | "day" | "goals" | "goal"; date: string | null; goalId?: string | null; recoveryGeneration?: string | null;
-  result: { ok: boolean; message?: string; stdout?: string; stderr?: string; receipt?: Receipt } | null;
+  mode?: "execution" | "planning"; draftId?: string | null; selectedPhaseId?: string | null;
+  result: { ok: boolean; message?: string; stdout?: string; stderr?: string; receipt?: Receipt; draft?: PlanningDraft } | null;
 };
 const ACTIVE = new Set(["starting", "running", "paused", "stopping"]);
 const STATUSES: Record<string, string> = {
@@ -40,14 +41,17 @@ async function request<T>(url: string, body?: unknown): Promise<T> {
   return data as T;
 }
 
-export function AgentPanel({ open, onClose, onOpen, triggerRef, surface, date, goalId, recoveryGeneration, contextReady, onRan, onStatusChange }: {
+export function AgentPanel({ open, onClose, onOpen, triggerRef, surface, date, goalId, recoveryGeneration, contextReady, onRan, onStatusChange, mode = "execution", draftId = null, selectedPhaseId = null, expectedDraftRevision = null }: {
   open: boolean; onClose: () => void; onOpen?: () => void; triggerRef: RefObject<HTMLElement | null>;
   surface: "today" | "todo" | "day" | "goals" | "goal"; date: string | null; goalId: string | null; recoveryGeneration: string | null; contextReady: boolean; onRan?: () => void; onStatusChange?: (status: string | null) => void;
+  mode?: "execution" | "planning"; draftId?: string | null; selectedPhaseId?: string | null; expectedDraftRevision?: number | null;
 }) {
   const [items, setItems] = useState<Launcher[]>([]);
   const [selected, setSelected] = useState(() => readPreference(SELECTION_KEY));
-  const [prompt, setPrompt] = useState(() => readPreference(DRAFT_KEY));
+  const draftKey = mode === "planning" ? `${DRAFT_KEY}_planning` : DRAFT_KEY;
+  const [prompt, setPrompt] = useState(() => readPreference(mode === "planning" ? `${DRAFT_KEY}_planning` : DRAFT_KEY));
   const [run, setRun] = useState<Run | null>(null);
+  const [planningDraft, setPlanningDraft] = useState<PlanningDraft | null>(null);
   const [pending, setPending] = useState(false);
   const [synced, setSynced] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -63,12 +67,16 @@ export function AgentPanel({ open, onClose, onOpen, triggerRef, surface, date, g
   const actionRef = useRef(false);
   const requestRef = useRef<{ key: string; id: string } | null>(null);
   const notifiedRef = useRef("");
+  const draftRunRef = useRef("");
   const onRanRef = useRef(onRan);
+  const planningTargetRef = useRef({ mode, draftId });
   onRanRef.current = onRan;
+  planningTargetRef.current = { mode, draftId };
   const active = Boolean(run && ACTIVE.has(run.status));
   const paused = run?.status === "paused";
   const edited = Boolean(run && prompt.trim() !== run.prompt);
   const blocked = environment && ["missing", "invalid", "login_required"].includes(environment.status);
+  const currentPlanningRevision = planningDraft?.id === draftId ? planningDraft.revision : expectedDraftRevision;
   useAutoGrowingComposer(composerRef, promptRef);
 
   useEffect(() => {
@@ -98,8 +106,32 @@ export function AgentPanel({ open, onClose, onOpen, triggerRef, surface, date, g
   }, []);
 
   useEffect(() => { onStatusChange?.(active && run ? run.status : null); }, [active, run?.status, onStatusChange]);
-  useEffect(() => { savePreference(DRAFT_KEY, prompt); }, [prompt]);
+  useEffect(() => { savePreference(draftKey, prompt); }, [draftKey, prompt]);
+  useEffect(() => { setPrompt(readPreference(draftKey)); }, [draftKey]);
   useEffect(() => { savePreference(SELECTION_KEY, selected); }, [selected]);
+  useEffect(() => {
+    if (mode !== "planning" || !draftId) {
+      setPlanningDraft(null);
+      return;
+    }
+    let stopped = false;
+    request<PlanningDraft>(`/api/planning/drafts/${encodeURIComponent(draftId)}`)
+      .then((draft) => { if (!stopped) setPlanningDraft(draft); })
+      .catch((err) => { if (!stopped) setError(errorMessage(err)); });
+    return () => { stopped = true; };
+  }, [mode, draftId]);
+  useEffect(() => {
+    if (mode !== "planning" || !draftId) return;
+    const refresh = (event: Event) => {
+      const changedId = (event as CustomEvent<{ draftId?: string }>).detail?.draftId;
+      if (changedId !== draftId) return;
+      request<PlanningDraft>(`/api/planning/drafts/${encodeURIComponent(draftId)}`)
+        .then(setPlanningDraft)
+        .catch((err) => setError(errorMessage(err)));
+    };
+    window.addEventListener("planner:planning-draft-updated", refresh);
+    return () => window.removeEventListener("planner:planning-draft-updated", refresh);
+  }, [mode, draftId]);
   useEffect(() => {
     if (open) promptRef.current?.focus();
   }, [open]);
@@ -116,9 +148,28 @@ export function AgentPanel({ open, onClose, onOpen, triggerRef, surface, date, g
         const { run: latest } = await request<{ run: Run | null }>("/api/agent-runs");
         if (stopped) return;
         setRun(latest);
+        const target = planningTargetRef.current;
+        // The persisted draft may be newer than the last run result (manual
+        // edits, undo, or save). Never replay an old result into current state.
+        if (target.mode === "planning" && latest?.mode === "planning" && latest.draftId === target.draftId && ACTIVE.has(latest.status)) {
+          const current = await request<PlanningDraft>(`/api/planning/drafts/${encodeURIComponent(target.draftId!)}`);
+          if (stopped) return;
+          const signature = `${current.id}:${current.revision}:${current.runStatus}`;
+          if (signature !== draftRunRef.current) {
+            draftRunRef.current = signature;
+            window.dispatchEvent(new CustomEvent("planner:planning-draft-updated", {
+              detail: { draftId: current.id, revision: current.revision },
+            }));
+          }
+        }
         setSynced(true);
         if (latest && latest.result && notifiedRef.current !== latest.id) {
           notifiedRef.current = latest.id;
+          if (latest.mode === "planning" && latest.draftId && latest.result.draft?.revision) {
+            window.dispatchEvent(new CustomEvent("planner:planning-draft-updated", {
+              detail: { draftId: latest.draftId, revision: latest.result.draft.revision },
+            }));
+          }
           onRanRef.current?.();
         }
       } catch {
@@ -155,10 +206,11 @@ export function AgentPanel({ open, onClose, onOpen, triggerRef, surface, date, g
   async function submitPrompt(launcherId = selected, context = {
     surface, date, goalId,
     ...((surface === "goals" || surface === "goal") ? { recoveryGeneration } : {}),
+    ...(mode === "planning" ? { mode, draftId, selectedPhaseId, expectedDraftRevision: currentPlanningRevision } : {}),
   }) {
     const text = prompt.trim();
     if (!text || !launcherId) return;
-    const key = JSON.stringify([launcherId, text, context.surface, context.date, context.goalId, context.recoveryGeneration]);
+    const key = JSON.stringify([launcherId, text, context.surface, context.date, context.goalId, context.recoveryGeneration, context.mode, context.draftId, context.selectedPhaseId, context.expectedDraftRevision]);
     if (requestRef.current?.key !== key) requestRef.current = { key, id: crypto.randomUUID() };
     const next = await request<Run>("/api/agent-runs", {
       launcherId, requestId: requestRef.current.id, prompt: text, ...context,
@@ -200,17 +252,24 @@ export function AgentPanel({ open, onClose, onOpen, triggerRef, surface, date, g
       await submitPrompt(run.launcherId, {
         surface: run.surface, date: run.date, goalId: run.goalId ?? null,
         ...((run.surface === "goals" || run.surface === "goal") ? { recoveryGeneration: run.recoveryGeneration ?? null } : {}),
+        ...(run.mode === "planning" ? {
+          mode: "planning", draftId: run.draftId ?? null,
+          selectedPhaseId: run.selectedPhaseId ?? null,
+          expectedDraftRevision: finished.result?.draft?.revision ?? currentPlanningRevision,
+        } : {}),
       });
     });
   }
 
   const result = run?.result;
-  const feedback = Boolean(run && (active || (result && dismissed !== run.id)));
+  const planningRun = run?.mode === "planning";
+  const receiptMatchesContext = mode === "planning" ? run?.mode === "planning" && run.draftId === draftId : run?.mode !== "planning";
+  const feedback = Boolean(run && (active || (receiptMatchesContext && result && dismissed !== run.id)));
   const output = [result?.stdout, result?.stderr].filter(Boolean).join("\n").trim();
   // Final model replies include clarifications and limitations absent from the
   // database diff. Keep them visible; the raw transcript stays in the details.
-  const reply = result?.stdout?.replace(/(?:[`*_]\s*)?(?:PROCESS_CLEANUP_COMPLETE|INTENTIONAL_BACKGROUND_PROCESS_RETAINED|PROCESS_CLEANUP_BLOCKED)(?:\s*[`*_])?/g, "").replace(/\n{3,}/g, "\n\n").trim();
-  const status = run?.status === "succeeded" && !result?.receipt?.changed && reply
+  const reply = planningRun ? "" : result?.stdout?.replace(/(?:[`*_]\s*)?(?:PROCESS_CLEANUP_COMPLETE|INTENTIONAL_BACKGROUND_PROCESS_RETAINED|PROCESS_CLEANUP_BLOCKED)(?:\s*[`*_])?/g, "").replace(/\n{3,}/g, "\n\n").trim();
+  const status = planningRun && run?.status === "succeeded" ? "草案已更新" : run?.status === "succeeded" && !result?.receipt?.changed && reply
     ? "助手已回复" : run ? STATUSES[run.status] ?? run.status : "";
 
   return createPortal(
@@ -219,6 +278,11 @@ export function AgentPanel({ open, onClose, onOpen, triggerRef, surface, date, g
         {!synced && <p className="agent-connection" role="status">正在重新连接助手，执行状态确认后可继续操作…</p>}
         {!active && (blocked || !items.length) && <div className="agent-setup-hint"><span>{environment?.message ?? "连接一个助手，就能用一句话调整计划。"}</span><button type="button" onClick={() => { onClose(); navigate("/settings#assistant"); }}>连接助手</button></div>}
         {error && <p className="error agent-feedback" role="alert">{error}</p>}
+        {mode === "planning" && planningDraft?.id === draftId && <section className="planning-agent-conversation" aria-label="规划对话">
+          <header><span>规划对话</span>{planningDraft.runStatus === "running" && <small>正在整理</small>}</header>
+          {planningDraft.conversation?.map((turn, index) => <p className={`planning-agent-turn ${turn.role}`} key={`${turn.role}-${turn.createdAt ?? index}`}><b>{turn.role === "user" ? "你" : "助手"}</b><span>{turn.content}</span></p>)}
+          {planningDraft.lastError && <p className="error">{planningDraft.lastError}</p>}
+        </section>}
         {feedback && run && <div className="agent-floating-receipt-card agent-run-card">
           <div className="agent-floating-receipt-header">
             <strong role="status">{status}</strong>

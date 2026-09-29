@@ -12,7 +12,7 @@ from typing import Any
 
 from local_planner.clock import Clock, format_utc
 from local_planner.domain.errors import Conflict, NotFound, ValidationError
-from local_planner.domain.models import Goal, GoalPhase, Task, normalize_notes, normalize_title
+from local_planner.domain.models import Goal, GoalAction, GoalPhase, Task, normalize_notes, normalize_title
 from local_planner.domain.store import UnitOfWork
 
 
@@ -51,6 +51,46 @@ def _horizon(value: str) -> str:
     return value.strip()
 
 
+def _action(uow: UnitOfWork, goal: Goal, action_id: str) -> GoalAction:
+    action = uow.get_goal_action(action_id)
+    if action is None or action.goal_id != goal.id:
+        raise ValidationError("行动不属于这个目标")
+    return action
+
+
+def _parent(uow: UnitOfWork, goal: Goal, parent_goal_id: str | None) -> str | None:
+    if parent_goal_id is None:
+        return None
+    parent = require_goal(uow, parent_goal_id)
+    if parent.id == goal.id:
+        raise ValidationError("目标不能支持自身")
+    seen = {goal.id}
+    cursor = parent
+    while cursor.parent_goal_id is not None:
+        if cursor.id in seen:
+            raise ValidationError("目标支持关系不能形成循环")
+        seen.add(cursor.id)
+        cursor = require_goal(uow, cursor.parent_goal_id)
+    if cursor.id in seen:
+        raise ValidationError("目标支持关系不能形成循环")
+    return parent.id
+
+
+def _action_request(uow: UnitOfWork, request_id: str, values: dict) -> tuple[str, GoalAction | None]:
+    if not isinstance(request_id, str) or not request_id.strip() or len(request_id) > 100:
+        raise ValidationError("需要有效的 requestId（1–100 字）")
+    fingerprint = hashlib.sha256(json.dumps(values, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+    prior = uow.get_goal_action_request(request_id)
+    if prior:
+        if prior[0] != fingerprint:
+            raise Conflict("同一 requestId 已用于不同操作，请核对后重试")
+        action = uow.get_goal_action(prior[1])
+        if action is None:
+            raise Conflict("操作记录已失效，请刷新后重试")
+        return fingerprint, action
+    return fingerprint, None
+
+
 def _request(uow: UnitOfWork, request_id: str, values: dict) -> tuple[str, Goal | None]:
     if not isinstance(request_id, str) or not request_id.strip() or len(request_id) > 100:
         raise ValidationError("需要有效的 requestId（1–100 字）")
@@ -75,7 +115,7 @@ def create_goal(clock: Clock, uow: UnitOfWork, title: str, *, notes: str = "",
     fingerprint, prior = _request(uow, request_id, dict(operation="create", title=title, notes=notes, horizon_text=horizon_text))
     if prior:
         return prior
-    goal = Goal(str(uuid.uuid4()), title, notes, horizon_text, "active", None, None, None, 1, _now(clock), _now(clock))
+    goal = Goal(str(uuid.uuid4()), title, notes, horizon_text, "active", None, None, None, None, None, 1, _now(clock), _now(clock))
     uow.save_goal(goal)
     uow.save_goal_request(request_id, fingerprint, goal.id)
     return goal
@@ -111,7 +151,20 @@ def task_changed(clock: Clock, uow: UnitOfWork, before: Task, after: Task | None
     if goal is None:
         return
     invalid = after is None or after.completed_at is not None or after.discarded_at is not None or after.goal_id != goal.id
-    _save_changed(clock, uow, goal, next_task_id=None if invalid and goal.next_task_id == before.id else goal.next_task_id)
+    updates: dict[str, Any] = {"next_task_id": None if invalid and goal.next_task_id == before.id else goal.next_task_id}
+    linked_actions: list[GoalAction] = []
+    for action in uow.list_goal_actions(goal.id):
+        if action.task_id == before.id:
+            linked_actions.append(action)
+            if invalid and goal.next_action_id == action.id:
+                updates["next_action_id"] = None
+    _save_changed(clock, uow, goal, **updates)
+    # A hard delete removes the roadmap row as well: it represented this exact
+    # formal Task, not a second candidate the user asked to keep. Undo carries
+    # the row's stable ID and restores it with the Task.
+    if after is None:
+        for action in linked_actions:
+            uow.delete_goal_action(action.id)
 
 
 def change_goal(clock: Clock, uow: UnitOfWork, goal_id: str, operation: str, *, expected_revision: int, **values: Any) -> Goal:
@@ -120,14 +173,21 @@ def change_goal(clock: Clock, uow: UnitOfWork, goal_id: str, operation: str, *, 
     goal = require_goal(uow, goal_id)
     allowed = {
         "edit": {"title", "notes", "horizon_text"},
+        "set-parent": {"parent_goal_id"},
         "state": {"state", "end_reason"},
         "add-task": {"title", "notes", "phase_id", "request_id"},
         "link-task": {"task_id", "phase_id", "expected_goal_id"},
         "unlink-task": {"task_id"}, "next": {"task_id"},
         "schedule-next": {"expected_task_id", "expected_scheduled_date"},
-        "add-phase": {"title", "notes", "request_id"},
-        "edit-phase": {"phase_id", "title", "notes", "status"},
+        "add-phase": {"title", "notes", "outcome", "horizon_text", "request_id"},
+        "edit-phase": {"phase_id", "title", "notes", "status", "outcome", "horizon_text"},
         "focus-phase": {"phase_id"}, "reorder-phases": {"phase_ids"},
+        "add-action": {"title", "notes", "phase_id", "request_id"},
+        "edit-action": {"action_id", "title", "notes", "phase_id"},
+        "remove-action": {"action_id"},
+        "next-action": {"action_id"},
+        "materialize-action": {"action_id", "destination", "request_id"},
+        "link-action": {"action_id", "task_id", "expected_task_id"},
     }
     if operation not in allowed or set(values) - allowed[operation]:
         raise ValidationError("目标操作或参数无效")
@@ -138,6 +198,10 @@ def change_goal(clock: Clock, uow: UnitOfWork, goal_id: str, operation: str, *, 
         fingerprint, prior = _request(uow, request_id, dict(operation=operation, goal_id=goal_id, **values))
         if prior:
             return prior
+    if operation in {"add-action", "materialize-action"}:
+        fingerprint, prior_action = _action_request(uow, request_id, dict(operation=operation, goal_id=goal_id, **values))
+        if prior_action:
+            return goal
     if type(expected_revision) is not int or expected_revision != goal.revision:
         raise Conflict("目标已发生变化，请刷新后重试，当前草稿仍可保留")
     if goal.state == "ended" and operation not in {"edit", "state"}:
@@ -146,6 +210,10 @@ def change_goal(clock: Clock, uow: UnitOfWork, goal_id: str, operation: str, *, 
     updates: dict[str, Any] = {}
     if operation == "edit":
         updates = dict(title=normalize_title(values.get("title")), notes=normalize_notes(values.get("notes")), horizon_text=_horizon(values.get("horizon_text")))
+    elif operation == "set-parent":
+        if "parent_goal_id" not in values:
+            raise ValidationError("需要 parentGoalId，清空时传 null")
+        updates = {"parent_goal_id": _parent(uow, goal, values["parent_goal_id"])}
     elif operation == "state":
         state, reason = values.get("state"), values.get("end_reason")
         if state not in {"active", "paused", "ended"} or (state == "ended" and reason not in {"achieved", "abandoned"}) or (state != "ended" and reason is not None):
@@ -170,6 +238,11 @@ def change_goal(clock: Clock, uow: UnitOfWork, goal_id: str, operation: str, *, 
         task = replace(task, goal_id=goal.id, phase_id=phase_id)
         uow.save_task(task)
         refresh_task_snapshots(clock, uow, task)
+        if not any(action.task_id == task.id for action in uow.list_goal_actions(goal.id)):
+            uow.save_goal_action(GoalAction(
+                str(uuid.uuid4()), goal.id, phase_id, task.title, task.notes,
+                len(uow.list_goal_actions(goal.id)), task.id,
+            ))
     elif operation == "unlink-task":
         task = _task(uow, values.get("task_id"), unfinished=False)
         if task.goal_id != goal.id:
@@ -178,6 +251,9 @@ def change_goal(clock: Clock, uow: UnitOfWork, goal_id: str, operation: str, *, 
             commands.require_writable_day(clock, uow, task.current_scheduled_date)
         uow.save_task(replace(task, goal_id=None, phase_id=None))
         refresh_task_snapshots(clock, uow, replace(task, goal_id=None, phase_id=None))
+        for action in uow.list_goal_actions(goal.id):
+            if action.task_id == task.id:
+                uow.save_goal_action(replace(action, task_id=None))
         if goal.next_task_id == task.id:
             updates["next_task_id"] = None
     elif operation == "next":
@@ -204,14 +280,19 @@ def change_goal(clock: Clock, uow: UnitOfWork, goal_id: str, operation: str, *, 
         commands.schedule_to_date(clock, uow, task.id, clock.today())
         return require_goal(uow, goal.id)
     elif operation == "add-phase":
-        phase = GoalPhase(str(uuid.uuid4()), goal.id, normalize_title(values.get("title")), normalize_notes(values.get("notes", "")), len(uow.list_phases(goal.id)))
+        phase = GoalPhase(
+            str(uuid.uuid4()), goal.id, normalize_title(values.get("title")),
+            normalize_notes(values.get("notes", "")), len(uow.list_phases(goal.id)),
+            outcome=normalize_notes(values.get("outcome", "")), horizon_text=_horizon(values.get("horizon_text", "")),
+        )
         uow.save_phase(phase)
     elif operation == "edit-phase":
         phase = _phase(uow, goal, values.get("phase_id"))
         status = values.get("status")
         if status not in {"open", "done", "skipped"}:
             raise ValidationError("阶段状态无效")
-        updated = replace(phase, title=normalize_title(values.get("title")), notes=normalize_notes(values.get("notes")), status=status)
+        updated = replace(phase, title=normalize_title(values.get("title")), notes=normalize_notes(values.get("notes")), status=status,
+                          outcome=normalize_notes(values.get("outcome", phase.outcome)), horizon_text=_horizon(values.get("horizon_text", phase.horizon_text)))
         uow.save_phase(updated)
         if status != "open":
             if goal.focus_phase_id == phase.id:
@@ -219,6 +300,9 @@ def change_goal(clock: Clock, uow: UnitOfWork, goal_id: str, operation: str, *, 
             task = uow.get_task(goal.next_task_id) if goal.next_task_id else None
             if task and task.phase_id == phase.id:
                 updates["next_task_id"] = None
+            action = uow.get_goal_action(goal.next_action_id) if goal.next_action_id else None
+            if action and action.phase_id == phase.id:
+                updates["next_action_id"] = None
     elif operation == "focus-phase":
         if "phase_id" not in values:
             raise ValidationError("需要 phaseId，清空时传 null")
@@ -233,13 +317,110 @@ def change_goal(clock: Clock, uow: UnitOfWork, goal_id: str, operation: str, *, 
             raise Conflict("阶段列表已变化，请刷新后重试")
         for phase in phases:
             uow.save_phase(replace(phase, position=ids.index(phase.id)))
+    elif operation == "add-action":
+        phase_id = values.get("phase_id")
+        if phase_id is not None:
+            _phase(uow, goal, phase_id, open_only=True)
+        action = GoalAction(str(uuid.uuid4()), goal.id, phase_id, normalize_title(values.get("title")), normalize_notes(values.get("notes", "")), len(uow.list_goal_actions(goal.id)))
+        uow.save_goal_action(action)
+    elif operation == "edit-action":
+        action = _action(uow, goal, values.get("action_id"))
+        if action.task_id is not None:
+            raise Conflict("已关联事项的标题和备注请在事项中修改")
+        phase_id = values.get("phase_id")
+        if phase_id is not None:
+            _phase(uow, goal, phase_id, open_only=True)
+        uow.save_goal_action(replace(action, title=normalize_title(values.get("title")), notes=normalize_notes(values.get("notes")), phase_id=phase_id))
+    elif operation == "remove-action":
+        action = _action(uow, goal, values.get("action_id"))
+        if action.task_id is not None:
+            raise Conflict("已关联事项不能移除，请先解除关联")
+        # goals.next_action_id is an FK. Clear it before deleting its action,
+        # while still making this user operation one revision change.
+        if goal.next_action_id == action.id:
+            goal = _save_changed(clock, uow, goal, next_action_id=None)
+        else:
+            goal = _save_changed(clock, uow, goal)
+        uow.delete_goal_action(action.id)
+        return goal
+    elif operation == "next-action":
+        if "action_id" not in values:
+            raise ValidationError("需要 actionId，清空时传 null")
+        action_id = values["action_id"]
+        if action_id is not None:
+            action = _action(uow, goal, action_id)
+            if action.phase_id:
+                _phase(uow, goal, action.phase_id, open_only=True)
+            if action.task_id:
+                _task(uow, action.task_id)
+        # A roadmap candidate is the only thing represented by nextActionId.
+        # Once it has a formal Task, the established task selection remains
+        # the canonical next step and schedule-next keeps working unchanged.
+        updates = (
+            {"next_action_id": None, "next_task_id": action.task_id}
+            if action_id is not None and action.task_id is not None
+            else {"next_action_id": action_id, "next_task_id": None}
+        )
+    elif operation == "materialize-action":
+        action = _action(uow, goal, values.get("action_id"))
+        destination = values.get("destination")
+        if destination not in {"today", "inventory"}:
+            raise ValidationError("行动去向无效")
+        if action.phase_id:
+            _phase(uow, goal, action.phase_id, open_only=True)
+        if action.task_id is None:
+            task = commands.add_to_inventory(clock, uow, action.title).task
+            task = replace(task, notes=action.notes, goal_id=goal.id, phase_id=action.phase_id)
+            uow.save_task(task)
+            refresh_task_snapshots(clock, uow, task)
+            action = replace(action, task_id=task.id)
+            uow.save_goal_action(action)
+        else:
+            task = _task(uow, action.task_id, unfinished=False)
+        if destination == "today":
+            if task.completed_at is not None:
+                raise Conflict("事项已完成，不能加入今天")
+            commands.schedule_to_date(clock, uow, task.id, clock.today())
+        if goal.next_action_id == action.id:
+            updates = {
+                "next_action_id": None,
+                "next_task_id": action.task_id if task.completed_at is None else None,
+            }
+    elif operation == "link-action":
+        action = _action(uow, goal, values.get("action_id"))
+        if action.task_id is not None:
+            raise Conflict("行动已关联事项")
+        task = _task(uow, values.get("task_id"), unfinished=False)
+        if values.get("expected_task_id") is not None:
+            expected = values["expected_task_id"]
+            if expected != task.id:
+                raise Conflict("事项关联已变化，请刷新后重试")
+        if task.goal_id not in {None, goal.id}:
+            raise Conflict("事项已属于其他目标，请先解除原关联")
+        if any(item.task_id == task.id and item.id != action.id for item in uow.list_goal_actions(goal.id)):
+            raise Conflict("事项已经关联路线行动，请先解除原关联")
+        if action.phase_id:
+            _phase(uow, goal, action.phase_id)
+        task = replace(task, goal_id=goal.id, phase_id=action.phase_id)
+        uow.save_task(task)
+        refresh_task_snapshots(clock, uow, task)
+        uow.save_goal_action(replace(action, task_id=task.id))
+        if goal.next_action_id == action.id:
+            updates = {
+                "next_action_id": None,
+                "next_task_id": task.id if task.completed_at is None else None,
+            }
 
     goal = _save_changed(clock, uow, goal, **updates)
     if operation in {"edit", "edit-phase"}:
         for task in uow.list_goal_tasks(goal.id):
             refresh_task_snapshots(clock, uow, task)
     if fingerprint is not None:
-        uow.save_goal_request(request_id, fingerprint, goal.id)
+        if operation in {"add-action", "materialize-action"}:
+            action = _action(uow, goal, values.get("action_id")) if operation == "materialize-action" else action
+            uow.save_goal_action_request(request_id, fingerprint, action.id)
+        else:
+            uow.save_goal_request(request_id, fingerprint, goal.id)
     return goal
 
 
@@ -252,10 +433,22 @@ def task_payload(task: Task) -> dict[str, Any]:
 def goal_payload(uow: UnitOfWork, goal: Goal) -> dict[str, Any]:
     return dict(id=goal.id, title=goal.title, notes=goal.notes, horizonText=goal.horizon_text,
                 state=goal.state, endReason=goal.end_reason, nextTaskId=goal.next_task_id,
+                parentGoalId=goal.parent_goal_id, nextActionId=goal.next_action_id,
                 focusPhaseId=goal.focus_phase_id, revision=goal.revision,
                 createdAt=goal.created_at, updatedAt=goal.updated_at, endedAt=goal.ended_at,
-                phases=[dict(id=p.id, goalId=p.goal_id, title=p.title, notes=p.notes, position=p.position, status=p.status) for p in uow.list_phases(goal.id)],
+                phases=[dict(id=p.id, goalId=p.goal_id, title=p.title, notes=p.notes, position=p.position, status=p.status, outcome=p.outcome, horizonText=p.horizon_text) for p in uow.list_phases(goal.id)],
+                actions=[action_payload(uow, action) for action in uow.list_goal_actions(goal.id)],
                 tasks=[task_payload(t) for t in uow.list_goal_tasks(goal.id)])
+
+
+def action_payload(uow: UnitOfWork, action: GoalAction) -> dict[str, Any]:
+    task = uow.get_task(action.task_id) if action.task_id else None
+    return dict(id=action.id, goalId=action.goal_id, phaseId=action.phase_id,
+                title=task.title if task else action.title, notes=task.notes if task else action.notes,
+                position=action.position, taskId=action.task_id,
+                scheduledDate=task.current_scheduled_date if task else None,
+                completed=bool(task and task.completed_at is not None),
+                discarded=bool(task and task.discarded_at is not None))
 
 
 def list_goal_payloads(uow: UnitOfWork) -> list[dict[str, Any]]:

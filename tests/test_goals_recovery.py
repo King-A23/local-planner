@@ -6,7 +6,11 @@ import sqlite3
 from contextlib import closing
 from pathlib import Path
 
+import pytest
+
 from local_planner.clock import FrozenClock
+from local_planner.domain import planning
+from local_planner.domain.errors import Conflict
 from local_planner.persistence import SqliteUnitOfWork
 from local_planner.persistence.connection import MIGRATIONS_DIR, sql_statements
 from local_planner.recovery import restore, snapshot
@@ -51,7 +55,7 @@ def test_v7_backup_restores_and_migrates_goal_fields_to_null(tmp_path: Path) -> 
     try:
         result = restore(live.conn, tmp_path, old_backup, CLOCK)
         assert result["ok"] is True
-        assert live.conn.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == 8
+        assert live.conn.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == 10
         assert tuple(
             live.conn.execute("SELECT goal_id, phase_id FROM tasks WHERE id = 'old-task'").fetchone()
         ) == (None, None)
@@ -137,5 +141,28 @@ def test_goal_phase_task_and_day_snapshots_round_trip_through_restore(tmp_path: 
             FROM day_task_entries WHERE day_date = '2026-08-30' AND task_id = 'task-1'
             """
         ).fetchone()) == ("做一套模拟题", "记录错题", "goal-1", "通过 CSP", "phase-1", "基础")
+    finally:
+        live.close()
+
+
+def test_planning_draft_survives_restore_but_old_generation_cannot_write(tmp_path: Path) -> None:
+    (tmp_path / "backups").mkdir()
+    live = SqliteUnitOfWork.open(tmp_path / "planner.sqlite")
+    try:
+        with live.transaction():
+            draft = planning.create_draft(
+                CLOCK, live, request_id="draft-before-restore", recovery_generation=None,
+            )
+        saved = snapshot(live.conn, tmp_path)
+        result = restore(live.conn, tmp_path, tmp_path / "backups" / saved["name"], CLOCK)
+        assert result["ok"] is True
+        restored = planning.get_draft(live, draft["id"])
+        assert restored["id"] == draft["id"]
+        assert restored["recoveryGeneration"] is None
+        with live.transaction(), pytest.raises(Conflict, match="数据已恢复"):
+            planning.change_draft(
+                CLOCK, live, draft["id"], "discard", expected_revision=restored["revision"],
+                recovery_generation=None, request_id="old-generation-write",
+            )
     finally:
         live.close()

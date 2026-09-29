@@ -44,6 +44,9 @@ export function App() {
   const [agentRunTick, setAgentRunTick] = useState(0);
   const [goalRecoveryGeneration, setGoalRecoveryGeneration] = useState<string | null>(null);
   const [goalContextReady, setGoalContextReady] = useState(false);
+  const [planningContext, setPlanningContext] = useState<{
+    draftId: string; goalId: string | null; selectedPhaseId: string | null; expectedDraftRevision: number;
+  } | null>(null);
   const agentTriggerRef = useRef<HTMLElement | null>(null);
 
   const openAgent = useCallback((trigger: HTMLButtonElement) => {
@@ -112,7 +115,57 @@ export function App() {
       window.removeEventListener("planner:items-changed", refreshAll);
     };
   }, [refreshAll]);
+  useEffect(() => {
+    const beginPlanning = (event: Event) => {
+      const detail = (event as CustomEvent<Partial<{
+        draftId: string; goalId: string | null; selectedPhaseId: string | null; expectedDraftRevision: number;
+      }>>).detail;
+      if (!detail?.draftId || typeof detail.expectedDraftRevision !== "number") return;
+      setPlanningContext({
+        draftId: detail.draftId,
+        goalId: detail.goalId ?? null,
+        selectedPhaseId: detail.selectedPhaseId ?? null,
+        expectedDraftRevision: detail.expectedDraftRevision,
+      });
+      setAgentOpen(true);
+    };
+    window.addEventListener("planner:planning-context", beginPlanning);
+    const updatePlanningRevision = (event: Event) => {
+      const detail = (event as CustomEvent<{ draftId?: string; revision?: number }>).detail;
+      if (!detail?.draftId || typeof detail.revision !== "number") return;
+      const revision = detail.revision;
+      setPlanningContext((current) => {
+        if (!current || current.draftId !== detail.draftId) return current;
+        return { ...current, expectedDraftRevision: revision };
+      });
+    };
+    const selectPlanningPhase = (event: Event) => {
+      const detail = (event as CustomEvent<{
+        draftId?: string; goalId?: string | null; selectedPhaseId?: string | null;
+      }>).detail;
+      if (!detail?.draftId) return;
+      setPlanningContext((current) => {
+        if (!current || current.draftId !== detail.draftId) return current;
+        return { ...current, selectedPhaseId: detail.selectedPhaseId ?? null };
+      });
+    };
+    window.addEventListener("planner:planning-draft-updated", updatePlanningRevision);
+    window.addEventListener("planner:planning-phase-selected", selectPlanningPhase);
+    const clearPlanning = () => setPlanningContext(null);
+    window.addEventListener("planner:planning-context-clear", clearPlanning);
+    return () => {
+      window.removeEventListener("planner:planning-context", beginPlanning);
+      window.removeEventListener("planner:planning-draft-updated", updatePlanningRevision);
+      window.removeEventListener("planner:planning-phase-selected", selectPlanningPhase);
+      window.removeEventListener("planner:planning-context-clear", clearPlanning);
+    };
+  }, []);
   useEffect(() => { if (route.kind === "settings") setAgentOpen(false); }, [route.kind]);
+  useEffect(() => {
+    if (route.kind !== "goals" && route.kind !== "goal") setPlanningContext(null);
+    if (route.kind === "goals" && planningContext?.goalId) setPlanningContext(null);
+    if (route.kind === "goal" && planningContext?.goalId && planningContext.goalId !== route.id) setPlanningContext(null);
+  }, [route.kind, route.kind === "goal" ? route.id : "", planningContext?.goalId]);
 
   useEffect(() => {
     const open = () => { if (!document.querySelector("dialog[open]")) setSearchOpen(true); };
@@ -269,6 +322,10 @@ export function App() {
         goalId={agentGoalId}
         recoveryGeneration={goalRecoveryGeneration}
         contextReady={agentSurface !== "goals" && agentSurface !== "goal" || goalContextReady}
+        mode={planningContext ? "planning" : "execution"}
+        draftId={planningContext?.draftId ?? null}
+        selectedPhaseId={planningContext?.selectedPhaseId ?? null}
+        expectedDraftRevision={planningContext?.expectedDraftRevision ?? null}
         onRan={() => {
           setAgentRunTick((tick) => tick + 1);
           refreshMeta();

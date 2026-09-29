@@ -97,6 +97,11 @@ def _goal_parser(top: argparse._SubParsersAction[DomainParser]) -> None:
     state.add_argument("--end-reason", choices=("achieved", "abandoned"))
     _goal_write(state)
 
+    parent = _leaf(sub, "set-parent", "goal.set-parent")
+    parent.add_argument("goal_id")
+    parent.add_argument("--parent-goal-id", required=True, help="主要支持目标 ID；清空传 none")
+    _goal_write(parent)
+
     add_task = _leaf(sub, "add-task", "goal.add-task")
     add_task.add_argument("goal_id")
     add_task.add_argument("--title", required=True)
@@ -139,6 +144,8 @@ def _goal_parser(top: argparse._SubParsersAction[DomainParser]) -> None:
     add_phase.add_argument("goal_id")
     add_phase.add_argument("--title", required=True)
     add_phase.add_argument("--notes", default="")
+    add_phase.add_argument("--outcome", default="")
+    add_phase.add_argument("--horizon-text", default="")
     _goal_write(add_phase, request_id=True)
 
     edit_phase = _leaf(phase_sub, "edit", "goal.phase.edit")
@@ -147,6 +154,8 @@ def _goal_parser(top: argparse._SubParsersAction[DomainParser]) -> None:
     edit_phase.add_argument("--title", required=True)
     edit_phase.add_argument("--notes", required=True)
     edit_phase.add_argument("--status", required=True, choices=("open", "done", "skipped"))
+    edit_phase.add_argument("--outcome", default="")
+    edit_phase.add_argument("--horizon-text", default="")
     _goal_write(edit_phase)
 
     focus_phase = _leaf(phase_sub, "focus", "goal.phase.focus")
@@ -158,6 +167,51 @@ def _goal_parser(top: argparse._SubParsersAction[DomainParser]) -> None:
     reorder.add_argument("goal_id")
     reorder.add_argument("phase_ids", nargs="+")
     _goal_write(reorder)
+
+    action = _leaf(sub, "action", "goal.action.add")
+    action_sub = action.add_subparsers(dest="goal_action_cmd", required=True, parser_class=DomainParser)
+    add_action = _leaf(action_sub, "add", "goal.action.add")
+    add_action.add_argument("goal_id")
+    add_action.add_argument("--title", required=True)
+    add_action.add_argument("--notes", default="")
+    add_action.add_argument("--phase-id")
+    _goal_write(add_action, request_id=True)
+    edit_action = _leaf(action_sub, "edit", "goal.action.edit")
+    edit_action.add_argument("goal_id"); edit_action.add_argument("action_id")
+    edit_action.add_argument("--title", required=True); edit_action.add_argument("--notes", required=True)
+    edit_action.add_argument("--phase-id", required=True)
+    _goal_write(edit_action)
+    remove_action = _leaf(action_sub, "remove", "goal.action.remove")
+    remove_action.add_argument("goal_id"); remove_action.add_argument("action_id"); _goal_write(remove_action)
+    next_action = _leaf(action_sub, "next", "goal.action.next")
+    next_action.add_argument("goal_id"); next_action.add_argument("--action-id", required=True, help="行动 ID；清空传 none"); _goal_write(next_action)
+    materialize = _leaf(action_sub, "materialize", "goal.action.materialize")
+    materialize.add_argument("goal_id"); materialize.add_argument("action_id")
+    materialize.add_argument("--destination", required=True, choices=("today", "inventory")); _goal_write(materialize, request_id=True)
+    link_action = _leaf(action_sub, "link", "goal.action.link")
+    link_action.add_argument("goal_id"); link_action.add_argument("action_id"); link_action.add_argument("task_id")
+    link_action.add_argument("--expected-task-id", required=True, help="事项 ID；未关联传 none")
+    _goal_write(link_action)
+
+
+def _planning_parser(top: argparse._SubParsersAction[DomainParser]) -> None:
+    planner = _leaf(top, "planning", "planning.list")
+    sub = planner.add_subparsers(dest="planning_cmd", required=True, parser_class=DomainParser)
+    listing = _leaf(sub, "list", "planning.list")
+    listing.add_argument("--goal-id")
+    show = _leaf(sub, "show", "planning.show")
+    show.add_argument("draft_id")
+    create = _leaf(sub, "create", "planning.create")
+    create.add_argument("--goal-id")
+    create.add_argument("--phase-id")
+    create.add_argument("--request-id", required=True)
+    create.add_argument("--recovery-generation", required=True)
+    for operation in ("update", "undo", "apply", "discard", "revert"):
+        command = _leaf(sub, operation, f"planning.{operation}")
+        command.add_argument("draft_id")
+        _goal_write(command, request_id=True)
+        if operation == "update":
+            command.add_argument("--document-file", required=True, help="UTF-8 JSON 文档：{goals: [...]}；仅更新草案")
 
 
 def build_domain_parser() -> DomainParser:
@@ -174,6 +228,7 @@ def build_domain_parser() -> DomainParser:
     _leaf(top, "context", "context")
     _leaf(top, "capabilities", "capabilities")
     _goal_parser(top)
+    _planning_parser(top)
     search = _leaf(top, "search", "search")
     search.add_argument("--query", required=True, help="按标题和备注搜索未完成事项，最多 200 字")
 

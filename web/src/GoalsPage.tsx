@@ -1,459 +1,1513 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  type HTMLAttributes,
+  useState,
+  type FormEvent,
+  type ReactElement,
+} from "react";
 import {
   changeGoal,
-  completeInventoryTask,
-  completeTodo,
   createGoal,
+  createPlanningDraft,
   errorMessage,
   getGoal,
+  getPlanningDraft,
   listGoalCandidates,
   listGoals,
+  listPlanningDrafts,
+  updatePlanningDraft,
   type Goal,
-  type GoalEndReason,
+  type GoalAction,
   type GoalList,
   type GoalPhase,
   type GoalPhaseStatus,
-  type GoalState,
   type GoalTask,
+  type PlanningDraft,
 } from "./api";
-import { ItemMenu, ItemRow, type ItemAction } from "./ItemActions";
-import { NotesMark, openItemEditor } from "./ItemEditor";
+import { ItemMenu, type ItemAction } from "./ItemActions";
 import { Modal } from "./Modal";
-import { ReorderList } from "./ReorderList";
+import { ComposerKeyboard } from "./composerKeyboard";
+import { openItemEditor } from "./ItemEditor";
+import { goalPath, visibleGoalIds, nextGoalAction } from "./planningView";
 import { handleNavClick, navigate } from "./route";
-import { useEntryKeyboard } from "./useEntryKeyboard";
 
 type GoalResponse = Goal & Pick<GoalList, "serverToday" | "recoveryGeneration">;
-type GoalEditor = { item?: Goal; revision?: number; recoveryGeneration?: string | null } | null;
-type PhaseEditor = { item?: GoalPhase; revision: number; recoveryGeneration: string | null } | null;
-type TaskEditor = { phaseId: string | null; revision: number; recoveryGeneration: string | null } | null;
-type AssignmentEditor = { task: GoalTask; revision: number; recoveryGeneration: string | null } | null;
-type TaskPicker = "link" | "next" | null;
+const uid = () => crypto.randomUUID();
+const stageName = (s: GoalPhaseStatus) =>
+  s === "done" ? "已完成" : s === "skipped" ? "已跳过" : "后续阶段";
+const phase = (g: Goal, id: string | null) => g.phases.find((p) => p.id === id);
 
-function requestId(): string {
-  return crypto.randomUUID();
+function usePlannerFormKeyboard(): HTMLAttributes<HTMLFormElement> {
+  const keyboard = useRef(new ComposerKeyboard());
+  return {
+    onCompositionStart: () => keyboard.current.compositionStart(),
+    onCompositionEnd: () => keyboard.current.compositionEnd(performance.now()),
+    onKeyUp: (event) => keyboard.current.keyUp(event.key),
+    onKeyDown: (event) => {
+      const action = keyboard.current.keyDown(event.nativeEvent, "enter", performance.now());
+      if (action === "ime") event.stopPropagation();
+      if (action === "suppress") { event.preventDefault(); event.stopPropagation(); }
+    },
+  };
 }
 
-function idFor(
-  ref: { current: { fingerprint: string; id: string } | null },
-  values: unknown,
-): string {
-  const fingerprint = JSON.stringify(values);
-  if (!ref.current || ref.current.fingerprint !== fingerprint) ref.current = { fingerprint, id: requestId() };
-  return ref.current.id;
+function useStageReveal(selection: string | null | undefined) {
+  const track = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const container = track.current;
+    const node = container?.querySelector<HTMLElement>('[aria-pressed="true"]');
+    if (!container || !node) return;
+    const bounds = container.getBoundingClientRect();
+    const stage = node.getBoundingClientRect();
+    if (stage.left < bounds.left || stage.right > bounds.right)
+      container.scrollLeft += stage.left - bounds.left - (bounds.width - stage.width) / 2;
+  }, [selection]);
+  return track;
 }
 
-function stateText(state: GoalState, reason: GoalEndReason): string {
-  if (state === "active") return "进行中";
-  if (state === "paused") return "已暂停";
-  return reason === "achieved" ? "已达成" : "已结束";
+function DraftBanner({
+  draft,
+  onDone,
+  onRefresh,
+  onContinue,
+}: {
+  draft: PlanningDraft;
+  onDone: () => void;
+  onRefresh: () => Promise<void>;
+  onContinue: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const run = async (operation: "apply" | "discard" | "undo" | "revert") => {
+    setBusy(true);
+    try {
+      await updatePlanningDraft(draft.id, {
+        operation,
+        expectedRevision: draft.revision,
+        recoveryGeneration: draft.recoveryGeneration,
+        requestId: uid(),
+      });
+      if (operation === "apply" || operation === "discard" || operation === "revert") {
+        window.dispatchEvent(new Event("planner:planning-context-clear"));
+        onDone();
+      } else await onRefresh();
+      window.dispatchEvent(new Event("planner:items-changed"));
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (draft.status === "discarded") return null;
+  const locked = busy || draft.runStatus === "running";
+  return (
+    <aside className="planning-draft-banner">
+      <div>
+        <span className="page-eyebrow">
+          {draft.status === "applied" ? "已保存的规划" : "规划草案"}
+        </span>
+        <strong>
+          {draft.status === "applied"
+            ? "规划已保存，仍可撤销这一次保存"
+            : draft.runStatus === "running"
+              ? "正在整理你的想法"
+              : "先看看这次规划的变化"}
+        </strong>
+        <p>
+          {draft.status === "applied" ? "行动仍留在路线图，准备好时再加入今天。" : draft.lastError || (draft.changes?.length ? `包含 ${draft.changes.length} 项待保存调整` : "描述你的方向，也可以继续调整。") }
+        </p>
+      </div>
+      <div className="planning-draft-actions">
+        {draft.status === "editing" && draft.runStatus !== "running" && (
+          <button className="linkish" disabled={locked} onClick={onContinue}>
+            继续调整
+          </button>
+        )}
+        {draft.canUndo && (
+          <button
+            className="linkish"
+            disabled={locked}
+            onClick={() => void run("undo")}
+          >
+            撤销修改
+          </button>
+        )}
+        {draft.canRevert && (
+          <button
+            className="linkish"
+            disabled={locked}
+            onClick={() => void run("revert")}
+          >
+            还原保存
+          </button>
+        )}
+        {draft.status === "editing" && (
+          <>
+            <button
+              className="button-secondary"
+              disabled={locked}
+              onClick={() => void run("discard")}
+            >
+              放弃
+            </button>
+            <button
+              className="button-primary"
+              disabled={locked}
+              onClick={() => void run("apply")}
+            >
+              保存规划
+            </button>
+          </>
+        )}
+      </div>
+      {draft.status === "editing" && draft.changes?.length ? (
+        <details className="planning-draft-change-details"><summary>查看变更明细</summary><div className="planning-draft-changes">
+          {draft.changes.map((c) => (
+            <span
+              className={`draft-change ${c.type}`}
+              key={`${c.kind}-${c.id}`}
+            >
+              {c.type === "added"
+                ? "新增"
+                : c.type === "removed"
+                  ? "移除"
+                  : "调整"}{" "}
+              · {c.title}
+            </span>
+          ))}
+        </div></details>
+      ) : null}
+      {error && <p className="error">{error}</p>}
+    </aside>
+  );
 }
 
-function phaseText(status: GoalPhaseStatus): string {
-  return status === "open" ? "进行中" : status === "done" ? "已完成" : "已跳过";
+function GoalMap({
+  goals,
+  selectedId,
+  onSelect,
+  changes,
+}: {
+  goals: Goal[];
+  selectedId?: string | null;
+  onSelect: (id: string) => void;
+  changes?: PlanningDraft["changes"];
+}) {
+  const [expanded, setExpanded] = useState(new Set<string>());
+  const [showInactive, setShowInactive] = useState(false);
+  const [focused, setFocused] = useState<string | null>(null);
+  const visible = visibleGoalIds(goals, showInactive);
+  const collapsedCount = goals.length - visibleGoalIds(goals).size;
+  const relatedIds = new Set(goalPath(goals, selectedId || focused || "").map((g) => g.id));
+  const grouped = useMemo(() => {
+    const m = new Map<string | null, Goal[]>();
+    const ids = new Set(goals.map((g) => g.id));
+    goals.forEach((g) => {
+      const key =
+        g.parentGoalId && ids.has(g.parentGoalId) ? g.parentGoalId : null;
+      m.set(key, [...(m.get(key) ?? []), g]);
+    });
+    return m;
+  }, [goals]);
+  const changed = new Set(changes?.map((c) => c.goalId) ?? []);
+  const node = (g: Goal, depth: number): ReactElement => {
+    const children = (grouped.get(g.id) ?? []).filter((child) => visible.has(child.id));
+    const focus = phase(g, g.focusPhaseId);
+    const next = nextGoalAction(g);
+    const related = relatedIds.has(g.id) || g.parentGoalId === (selectedId || focused);
+    return (
+      <div
+        className={`goal-map-node depth-${depth}${related ? " related" : ""}${selectedId === g.id ? " selected" : ""}`}
+        key={g.id}
+      >
+        <button className="goal-map-card" onFocus={() => setFocused(g.id)} onMouseEnter={() => setFocused(g.id)} onClick={() => onSelect(g.id)}>
+          <span className="goal-map-dot" data-state={g.state} />
+          <span>
+            <b>
+              {g.title}
+              {changed.has(g.id) && <i>草案</i>}
+            </b>
+            <small>{g.horizonText || "时间未定"}</small>
+            <em>
+              {g.state === "paused" ? "已暂停 · " : g.state === "ended" ? "已结束 · " : ""}{focus?.title || "尚未设置阶段"}
+              {next ? ` · ${next.title}` : ""}
+            </em>
+          </span>
+          <span>›</span>
+        </button>
+        {children.length > 0 && (depth < 1 || expanded.has(g.id)) && (
+          <div className="goal-map-children">
+            {children.map((child) => node(child, depth + 1))}
+          </div>
+        )}
+        {children.length > 0 && depth >= 1 && !expanded.has(g.id) && (
+          <button
+            className="goal-map-expand"
+            onClick={() => setExpanded((now) => new Set(now).add(g.id))}
+          >
+            展开 {children.length} 个支持目标
+          </button>
+        )}
+      </div>
+    );
+  };
+  const roots = grouped.get(null) ?? [];
+  return (
+    <section className="goal-map">
+      <div className="goal-map-legend">
+        <span>● 目标支持关系</span>
+        <span>点击目标查看路线</span>
+      </div>
+      <div className="goal-map-roots">{roots.filter((g) => visible.has(g.id)).map((g) => node(g, 0))}</div>
+      {collapsedCount > 0 && <button className="linkish map-inactive-toggle" aria-expanded={showInactive} onClick={() => setShowInactive(!showInactive)}>{showInactive ? "收起暂停与已结束目标" : `暂停与已结束 · ${collapsedCount}`}</button>}
+    </section>
+  );
 }
 
-function taskLocation(task: GoalTask, today: string): string {
-  if (task.completed) return "已完成";
-  if (!task.scheduledDate) return "待办";
-  if (task.scheduledDate === today) return "今天";
-  return task.scheduledDate;
-}
-
-function taskHref(task: GoalTask): string {
-  return task.scheduledDate ? `/d/${task.scheduledDate}` : "/inventory";
-}
-
-function phaseOf(goal: Goal, id: string | null): GoalPhase | undefined {
-  return id ? goal.phases.find((phase) => phase.id === id) : undefined;
-}
-
-export function GoalsPage({ onChange, onRecoveryGeneration, refreshToken }: { onChange?: () => void; onRecoveryGeneration?: (generation: string | null) => void; refreshToken?: number }) {
+export function GoalsPage({
+  onChange,
+  onRecoveryGeneration,
+  refreshToken,
+}: {
+  onChange?: () => void;
+  onRecoveryGeneration?: (generation: string | null) => void;
+  refreshToken?: number;
+}) {
   const [data, setData] = useState<GoalList | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [editor, setEditor] = useState<GoalEditor>(null);
+  const [editor, setEditor] = useState<Goal | undefined | null>(null);
+  const [draft, setDraft] = useState<PlanningDraft | null>(null);
+  const [previewId, setPreviewId] = useState<string | null>(null);
+  const [previewPhaseId, setPreviewPhaseId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const createRequest = useRef<{ fingerprint: string; id: string } | null>(null);
-
-  async function reload(): Promise<GoalList> {
-    const next = await listGoals();
-    setData(next);
-    onRecoveryGeneration?.(next.recoveryGeneration);
-    setError(null);
-    return next;
-  }
-  useEffect(() => { void reload().catch((err) => { setData({ items: [], serverToday: "", recoveryGeneration: null }); setError(errorMessage(err)); }); }, [refreshToken]);
-
-  async function save(input: { title: string; notes: string; horizonText: string }, snapshot: NonNullable<GoalEditor>): Promise<void> {
-    setBusy(true); setError(null);
-    try {
-      if (editor?.item) {
-        const changed = await changeGoal(editor.item.id, {
-          operation: "edit", expectedRevision: snapshot.revision ?? editor.item.revision,
-          recoveryGeneration: snapshot.recoveryGeneration ?? null, ...input,
-        });
-        navigate(`/goals/${changed.id}`);
-      } else {
-        const created = await createGoal({ ...input, requestId: idFor(createRequest, input), recoveryGeneration: snapshot.recoveryGeneration ?? null });
-        navigate(`/goals/${created.id}`);
-        createRequest.current = null;
-      }
-      setEditor(null); onChange?.();
-    } catch (err: unknown) { setError(errorMessage(err)); }
-    finally { setBusy(false); }
-  }
-
-  async function refreshEditor(): Promise<void> {
-    try {
-      const next = await reload();
-      setEditor((current) => current ? { ...current, recoveryGeneration: next.recoveryGeneration } : current);
-    } catch (err: unknown) { setError(errorMessage(err)); }
-  }
-
-  const active = (data?.items ?? []).filter((goal) => goal.state === "active");
-  const paused = (data?.items ?? []).filter((goal) => goal.state === "paused");
-  const ended = (data?.items ?? []).filter((goal) => goal.state === "ended");
-  const openCreate = () => data && setEditor({ recoveryGeneration: data.recoveryGeneration });
-  return <main className="page goals-page">
-    <header className="goals-heading">
-      <h1>目标</h1>
-      {Boolean(data?.items.length) && <button type="button" className="button-primary goal-add-button" disabled={busy} onClick={openCreate}><span aria-hidden="true">＋</span> 新建目标</button>}
-    </header>
-    {error && <p className="error" role="alert">{error}</p>}
-    {!data && <p className="goal-subtle-empty" role="status">加载中…</p>}
-    {data && !error && data.items.length === 0 && <section className="goals-empty">
-      <span className="goal-empty-symbol"><GoalIcon /></span>
-      <h2>给长远的想法，一个起点</h2>
-      <p>记下想实现的目标，从一个小行动开始。</p>
-      <button type="button" className="button-primary" disabled={busy} onClick={openCreate}>新建目标</button>
-    </section>}
-    {active.length > 0 && <GoalGroup title="进行中" goals={active} today={data?.serverToday ?? ""} />}
-    {paused.length > 0 && <GoalGroup title="已暂停" goals={paused} today={data?.serverToday ?? ""} />}
-    {ended.length > 0 && <GoalGroup title="已结束" goals={ended} today={data?.serverToday ?? ""} />}
-    {editor && <GoalEditorDialog item={editor.item} busy={busy} error={error} onClose={() => setEditor(null)} onRefresh={refreshEditor} onSave={(input) => save(input, editor)} />}
-  </main>;
-}
-
-function GoalIcon() {
-  return <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M5 21V4m0 1c4-5 10 5 14 0v10c-4 5-10-5-14 0" /></svg>;
-}
-
-function GoalGroup({ title, goals, today }: { title: string; goals: Goal[]; today: string }) {
-  return <section className="goal-group"><h2>{title}<span>{goals.length}</span></h2><ul className="goal-list">
-    {goals.map((goal) => {
-      const next = goal.tasks.find((task) => task.taskId === goal.nextTaskId);
-      const focus = phaseOf(goal, goal.focusPhaseId);
-      return <li key={goal.id} className={`goal-card state-${goal.state}`}>
-        <a className="goal-card-link" href={`/goals/${goal.id}`} onClick={(event) => handleNavClick(event, `/goals/${goal.id}`)}>
-          <span className="goal-card-symbol"><GoalIcon /></span>
-          <div className="goal-card-copy">
-            <div className="goal-card-title"><h3>{goal.title}</h3>{goal.horizonText && <span className="goal-card-horizon">{goal.horizonText}</span>}</div>
-            {focus && <p className="goal-card-phase">{focus.title}</p>}
-            <p className={`goal-card-next${next ? "" : " is-empty"}`}><span aria-hidden="true">↳</span>{next ? next.title : goal.state === "ended" ? stateText(goal.state, goal.endReason) : "选择一个下一步"}{next && <span className="goal-card-location">{taskLocation(next, today)}</span>}</p>
-          </div>
-          <span className="goal-card-arrow" aria-hidden="true">›</span>
-        </a>
-      </li>;
-    })}
-  </ul></section>;
-}
-
-export function GoalDetailPage({ id, onChange, onRecoveryGeneration, refreshToken }: { id: string; onChange?: () => void; onRecoveryGeneration?: (generation: string | null) => void; refreshToken?: number }) {
-  const [goal, setGoal] = useState<GoalResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [notesOpen, setNotesOpen] = useState(false);
-  const [editor, setEditor] = useState<GoalEditor>(null);
-  const [phaseEditor, setPhaseEditor] = useState<PhaseEditor>(null);
-  const [taskPicker, setTaskPicker] = useState<TaskPicker>(null);
-  const [addTask, setAddTask] = useState<TaskEditor>(null);
-  const [assignment, setAssignment] = useState<AssignmentEditor>(null);
-  const addTaskRequest = useRef<{ fingerprint: string; id: string } | null>(null);
-  const addPhaseRequest = useRef<{ fingerprint: string; id: string } | null>(null);
-  const latestGoal = useRef(goal);
-  latestGoal.current = goal;
-
-  async function reload(): Promise<GoalResponse> {
-    const next = await getGoal(id);
-    setGoal(next); setError(null);
-    onRecoveryGeneration?.(next.recoveryGeneration);
-    return next;
-  }
-  useEffect(() => { void reload().catch((err) => { setGoal(null); setError(errorMessage(err)); }); }, [id, refreshToken]);
+  const load = async () => {
+    const value = await listGoals();
+    setData(value);
+    onRecoveryGeneration?.(value.recoveryGeneration);
+    return value;
+  };
   useEffect(() => {
-    if (!notice) return;
-    const timer = window.setTimeout(() => setNotice(null), 3000);
-    return () => window.clearTimeout(timer);
-  }, [notice]);
+    void load().catch((e) => setError(errorMessage(e)));
+  }, [refreshToken]);
 
-  async function mutate(work: (current: GoalResponse) => Promise<GoalResponse>, message?: string): Promise<GoalResponse | null> {
-    const current = latestGoal.current;
-    if (!current || busy) return null;
-    setBusy(true); setError(null);
+  useEffect(() => {
+    void listPlanningDrafts()
+      .then((value) => {
+        const editing = value.items.find((item) => item.status === "editing") ?? value.items.find((item) => item.status === "applied");
+        setDraft(editing ?? null);
+      })
+      .catch(() => undefined);
+    const refreshDraft = (event: Event) => {
+      const id = (event as CustomEvent<{ draftId?: string }>).detail?.draftId;
+      if (id)
+        void getPlanningDraft(id)
+          .then((item) => { if (!item.scopeGoalId) setDraft(item); })
+          .catch(() => undefined);
+    };
+    window.addEventListener("planner:planning-draft-updated", refreshDraft);
+    return () =>
+      window.removeEventListener(
+        "planner:planning-draft-updated",
+        refreshDraft,
+      );
+  }, []);
+  const describe = async () => {
+    if (!data) return;
+    setBusy(true);
     try {
-      const next = await work(current);
-      setGoal(next);
-      onRecoveryGeneration?.(next.recoveryGeneration);
-      setNotice(message ?? null);
-      onChange?.();
-      return next;
-    } catch (err: unknown) {
-      setError(errorMessage(err));
-      return null;
-    } finally { setBusy(false); }
-  }
-  function action(operation: Parameters<typeof changeGoal>[1]["operation"], values: Record<string, unknown>, message?: string) {
-    return mutate((current) => changeGoal(current.id, {
-      operation, expectedRevision: current.revision, recoveryGeneration: current.recoveryGeneration, ...values,
-    }), message);
-  }
-  async function saveGoal(input: { title: string; notes: string; horizonText: string }, snapshot: NonNullable<GoalEditor>) {
-    const changed = await mutate((current) => changeGoal(current.id, {
-      operation: "edit", expectedRevision: snapshot.revision ?? current.revision,
-      recoveryGeneration: snapshot.recoveryGeneration ?? null, ...input,
-    }), "目标已更新");
-    if (changed) setEditor(null);
-  }
-  async function refreshGoalEditor(): Promise<void> {
-    try {
-      const fresh = await reload();
-      setEditor((current) => current ? {
-        ...current, item: fresh, revision: fresh.revision,
-        recoveryGeneration: fresh.recoveryGeneration,
-      } : current);
-      setError(null);
-    } catch (err: unknown) { setError(errorMessage(err)); }
-  }
-  async function refreshPhaseEditor(): Promise<void> {
-    try {
-      const fresh = await reload();
-      setPhaseEditor((current) => current ? { ...current, revision: fresh.revision, recoveryGeneration: fresh.recoveryGeneration } : current);
-      setError(null);
-    } catch (err: unknown) { setError(errorMessage(err)); }
-  }
-  async function refreshTaskEditor(): Promise<void> {
-    try {
-      const fresh = await reload();
-      setAddTask((current) => current ? { ...current, revision: fresh.revision, recoveryGeneration: fresh.recoveryGeneration } : current);
-      setError(null);
-    } catch (err: unknown) { setError(errorMessage(err)); }
-  }
-  async function savePhase(input: { title: string; notes: string; status: GoalPhaseStatus }) {
-    if (!phaseEditor) return;
-    const changed = await mutate((current) => changeGoal(current.id, {
-      operation: phaseEditor.item ? "edit-phase" : "add-phase",
-      expectedRevision: phaseEditor.revision, recoveryGeneration: phaseEditor.recoveryGeneration,
-      ...(phaseEditor.item ? { phaseId: phaseEditor.item.id, ...input } : { title: input.title, notes: input.notes, requestId: idFor(addPhaseRequest, { title: input.title, notes: input.notes }) }),
-    }), phaseEditor.item ? "阶段已更新" : "阶段已添加");
-    if (changed) { setPhaseEditor(null); addPhaseRequest.current = null; }
-  }
-  async function createTask(input: { title: string; notes: string; phaseId: string | null }) {
-    if (!addTask) return;
-    const changed = await mutate((current) => changeGoal(current.id, {
-      operation: "add-task", expectedRevision: addTask.revision, recoveryGeneration: addTask.recoveryGeneration,
-      ...input, requestId: idFor(addTaskRequest, input),
-    }), "行动已添加");
-    if (changed) { setAddTask(null); addTaskRequest.current = null; }
-  }
-  const activeTasks = (goal?.tasks ?? []).filter((task) => !task.completed);
-  const completedTasks = (goal?.tasks ?? []).filter((task) => task.completed);
-  const next = goal?.tasks.find((task) => task.taskId === goal.nextTaskId) ?? null;
-  const focused = goal ? phaseOf(goal, goal.focusPhaseId) : undefined;
-  async function completeTask(task: GoalTask) {
-    if (busy || task.completed) return;
-    const restoreFocus = document.activeElement instanceof HTMLInputElement && document.activeElement.type === "checkbox";
-    const index = activeTasks.findIndex((item) => item.taskId === task.taskId);
-    const focusTaskId = (activeTasks[index + 1] ?? activeTasks[index - 1])?.taskId;
-    setBusy(true); setError(null);
-    try {
-      if (task.scheduledDate) await completeTodo(task.scheduledDate, task.taskId);
-      else await completeInventoryTask(task.taskId);
-      await reload();
-      setNotice("行动已完成"); onChange?.();
-      if (restoreFocus) window.requestAnimationFrame(() => {
-        const selector = focusTaskId ? `.goal-task-row[data-item-id="${CSS.escape(focusTaskId)}"] input[type="checkbox"]` : ".goal-actions-add .linkish";
-        document.querySelector<HTMLElement>(selector)?.focus({ preventScroll: true });
+      const next = draft?.status === "editing" ? await getPlanningDraft(draft.id) : await createPlanningDraft({
+        requestId: uid(),
+        recoveryGeneration: data.recoveryGeneration,
       });
-    } catch (err: unknown) { setError(errorMessage(err)); }
-    finally { setBusy(false); }
-  }
-
-  if (!goal && !error) return <main className="page"><p>加载中…</p></main>;
-  if (!goal) return <main className="page"><p className="error">{error}</p><a href="/goals" onClick={(event) => handleNavClick(event, "/goals")}>返回目标</a></main>;
-  const writable = goal.state !== "ended";
-  const longNotes = goal.notes.length > 180 || goal.notes.split("\n").length > 3;
-  const openPhase = (item?: GoalPhase) => setPhaseEditor({ item, revision: goal.revision, recoveryGeneration: goal.recoveryGeneration });
-  const openTask = () => setAddTask({ phaseId: focused?.id ?? null, revision: goal.revision, recoveryGeneration: goal.recoveryGeneration });
-  const editTask = (task: GoalTask) => openItemEditor({ id: task.taskId, kind: "task", title: task.title, notes: task.notes, writable });
-  const goalActions: ItemAction[] = [
-    { label: "编辑目标", disabled: busy, run: () => setEditor({ item: goal, revision: goal.revision, recoveryGeneration: goal.recoveryGeneration }) },
-    ...(writable ? [{ label: "添加阶段", disabled: busy, run: () => openPhase() }] : []),
-    { label: goal.state === "active" ? "暂停目标" : goal.state === "paused" ? "恢复目标" : "重新打开目标", disabled: busy, separator: true,
-      run: () => void action("state", { state: goal.state === "active" ? "paused" : "active", endReason: null }, goal.state === "active" ? "目标已暂停" : "目标已恢复") },
-    ...(writable ? [
-      { label: "标记达成", disabled: busy, run: () => void action("state", { state: "ended", endReason: "achieved" }, "目标已标记为达成") },
-      { label: "结束目标", disabled: busy, run: () => void action("state", { state: "ended", endReason: "abandoned" }, "目标已结束") },
-    ] : []),
-  ];
-  function phaseActions(phase: GoalPhase): ItemAction[] {
-    if (!writable) return [];
-    const updateStatus = (status: GoalPhaseStatus) => void action("edit-phase", { phaseId: phase.id, title: phase.title, notes: phase.notes, status }, "阶段已更新");
-    return [
-      { label: "编辑阶段", disabled: busy, run: () => openPhase(phase) },
-      ...(phase.status === "open" ? [
-        { label: goal!.focusPhaseId === phase.id ? "取消当前阶段" : "设为当前阶段", disabled: busy, run: () => void action("focus-phase", { phaseId: goal!.focusPhaseId === phase.id ? null : phase.id }, "当前阶段已更新") },
-        { label: "完成阶段", disabled: busy, separator: true, run: () => updateStatus("done") },
-        { label: "跳过阶段", disabled: busy, run: () => updateStatus("skipped") },
-      ] : [{ label: "重新打开阶段", disabled: busy, run: () => updateStatus("open") }]),
-    ];
-  }
-  function taskActions(task: GoalTask): ItemAction[] {
-    return [
-      { label: "查看所在列表", run: () => navigate(taskHref(task)) },
-      ...(writable ? [
-        ...((!task.phaseId || phaseOf(goal!, task.phaseId)?.status === "open") ? [{ label: task.taskId === goal!.nextTaskId ? "取消下一步" : "设为下一步", disabled: busy, run: () => void action("next", { taskId: task.taskId === goal!.nextTaskId ? null : task.taskId }, "下一步已更新") }] : []),
-        ...(goal!.phases.length ? [{ label: "调整所属阶段", disabled: busy, run: () => setAssignment({ task, revision: goal!.revision, recoveryGeneration: goal!.recoveryGeneration }) }] : []),
-        { label: "解除目标关联", disabled: busy, separator: true, run: () => void action("unlink-task", { taskId: task.taskId }, "已解除关联") },
-      ] : []),
-    ];
-  }
-  return <main className="page goal-detail-page">
-    <div className="goal-back"><a href="/goals" onClick={(event) => handleNavClick(event, "/goals")}><span aria-hidden="true">‹</span> 所有目标</a></div>
-    <header className="goal-header">
-      <div className="goal-header-copy">
-        <div className="goal-title-row"><h1>{goal.title}</h1></div>
-        <div className="goal-header-meta"><span className={`goal-state state-${goal.state}`}>{stateText(goal.state, goal.endReason)}</span>{goal.horizonText && <span>{goal.horizonText}</span>}</div>
-        {goal.notes && <div className={`goal-notes${longNotes ? " is-collapsible" : ""}${notesOpen ? " is-open" : ""}`}><p>{goal.notes}</p>{longNotes && <button type="button" className="linkish quiet" aria-expanded={notesOpen} onClick={() => setNotesOpen((open) => !open)}>{notesOpen ? "收起备注" : "展开备注"}</button>}</div>}
-      </div>
-      <ItemMenu title="目标" actions={goalActions} />
-    </header>
-    {error && <p className="error" role="alert">{error}</p>}
-    {notice && <div className="undo-toast goal-toast" role="status"><span>{notice}</span></div>}
-
-    <section className={`goal-next-section${next ? " has-next" : ""}`} aria-labelledby="goal-next-heading">
-      <div className="goal-section-heading"><h2 id="goal-next-heading"><span className="goal-next-arrow" aria-hidden="true">↗</span>下一步</h2>
-        {writable && next && <ItemMenu title="下一步" actions={[
-          { label: "更换下一步", disabled: busy, run: () => setTaskPicker("next") },
-          { label: "取消下一步", disabled: busy, run: () => void action("next", { taskId: null }, "已取消下一步") },
-        ]} />}
-      </div>
-      {next ? <div className="goal-next-content"><div className="goal-next-copy"><button type="button" className="goal-next-title" onClick={() => editTask(next)}>{next.title}</button><span className="goal-task-meta">{taskLocation(next, goal.serverToday)}{next.phaseId && phaseOf(goal, next.phaseId) ? ` · ${phaseOf(goal, next.phaseId)!.title}` : ""}</span></div>
-        {next.scheduledDate === goal.serverToday ? <a className="goal-today-link" href={taskHref(next)} onClick={(event) => handleNavClick(event, taskHref(next))}>查看今天 <span aria-hidden="true">→</span></a> : goal.state === "active" && <button type="button" className="button-primary" disabled={busy} onClick={() => void action("schedule-next", { expectedTaskId: next.taskId, expectedScheduledDate: next.scheduledDate }, "下一步已加入今天")}>{next.scheduledDate ? "改排到今天" : "加入今天"}</button>}
-      </div> : <div className="goal-next-content"><p className="goal-next-empty">{goal.state === "ended" ? "这个目标已告一段落。" : "从一件小事开始。"}</p>{writable && <button type="button" className="button-secondary" disabled={busy} onClick={() => activeTasks.some((task) => !task.phaseId || phaseOf(goal, task.phaseId)?.status === "open") ? setTaskPicker("next") : openTask()}>{activeTasks.some((task) => !task.phaseId || phaseOf(goal, task.phaseId)?.status === "open") ? "选择下一步" : "添加行动"}</button>}</div>}
-    </section>
-
-    <div className={`goal-workspace${goal.phases.length ? " has-phases" : ""}`}>
-      {goal.phases.length > 0 && <section className="goal-route-section goal-panel" aria-labelledby="goal-route-heading">
-        <div className="goal-section-heading"><h2 id="goal-route-heading">阶段</h2>{writable && <button type="button" className="goal-icon-add" aria-label="添加阶段" title="添加阶段" disabled={busy} onClick={() => openPhase()}>＋</button>}</div>
-        <ReorderList items={goal.phases} getId={(phase) => phase.id} getLabel={(phase) => phase.title} writable={writable && !busy}
-          onReorder={async (phaseIds) => Boolean(await action("reorder-phases", { phaseIds }, "阶段顺序已更新"))}>
-          {(phase, row) => <ItemRow key={phase.id} {...row.attributes} id={phase.id} title={phase.title} actions={phaseActions(phase)} className={`goal-phase-row${goal.focusPhaseId === phase.id ? " is-current" : ""}`}>
-            {row.handle}<span className={`goal-phase-marker phase-${phase.status}`} aria-hidden="true">{phase.status === "done" ? "✓" : phase.status === "skipped" ? "−" : goal.phases.indexOf(phase) + 1}</span>
-            <div className="goal-phase-main"><button type="button" className="goal-phase-title" disabled={busy || !writable} onClick={() => openPhase(phase)}>{phase.title}</button>
-              {phase.notes && <span className="goal-phase-notes" title={phase.notes}>{phase.notes}</span>}
-              {goal.focusPhaseId === phase.id ? <span className="goal-phase-caption current">当前阶段</span> : phase.status !== "open" && <span className="goal-phase-caption">{phaseText(phase.status)}</span>}
-            </div>
-          </ItemRow>}
-        </ReorderList>
-      </section>}
-
-      <section className="goal-actions-section goal-panel" aria-labelledby="goal-actions-heading">
-        <div className="goal-section-heading"><h2 id="goal-actions-heading">行动<span className="goal-section-count">{activeTasks.length}</span></h2>
-          {writable && <div className="goal-actions-add"><button type="button" className="linkish" disabled={busy} onClick={openTask}><span aria-hidden="true">＋</span> 添加行动</button><ItemMenu title="行动" actions={[
-            { label: "关联已有待办", disabled: busy, run: () => setTaskPicker("link") },
-            ...(!goal.phases.length ? [{ label: "添加阶段", disabled: busy, run: () => openPhase() }] : []),
-          ]} /></div>}
+      setDraft(next);
+      window.dispatchEvent(
+        new CustomEvent("planner:planning-context", {
+          detail: {
+            draftId: next.id,
+            goalId: null,
+            selectedPhaseId: null,
+            expectedDraftRevision: next.revision,
+          },
+        }),
+      );
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const save = async (input: GoalInput) => {
+    if (!data) return;
+    setBusy(true);
+    try {
+      if (draft?.status === "editing") {
+        const id = uid();
+        const next = await updatePlanningDraft(draft.id, { operation: "update", expectedRevision: draft.revision,
+          recoveryGeneration: draft.recoveryGeneration, requestId: uid(), document: { goals: [...draft.document.goals,
+            { id, ...input, state: "active", endReason: null, nextTaskId: null, nextActionId: null, focusPhaseId: null, phases: [], actions: [] }] } });
+        setDraft(next); setPreviewId(id); setEditor(null);
+        window.dispatchEvent(new CustomEvent("planner:planning-draft-updated", { detail: { draftId: next.id, revision: next.revision } }));
+        return;
+      }
+      const { parentGoalId, ...createInput } = input;
+      let created = await createGoal({
+        ...createInput,
+        requestId: uid(),
+        recoveryGeneration: data.recoveryGeneration,
+      });
+      if (parentGoalId)
+        created = await changeGoal(created.id, {
+          operation: "set-parent",
+          parentGoalId,
+          expectedRevision: created.revision,
+          recoveryGeneration: created.recoveryGeneration,
+        });
+      setEditor(null);
+      onChange?.();
+      navigate(`/goals/${created.id}`);
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const shown =
+    draft?.status === "editing"
+      ? (draft.document.goals as Goal[])
+      : (data?.items ?? []);
+  const preview =
+    draft?.status === "editing"
+      ? shown.find((item) => item.id === previewId)
+      : null;
+  return (
+    <main className="page goals-page planning-page">
+      <header className="planning-heading">
+        <div>
+          <span className="page-eyebrow">规划</span>
+          <h1>让方向变成下一步</h1>
+          <p>目标相互支持，行动只在你决定时进入今天。</p>
         </div>
-        {activeTasks.length === 0 ? <p className="goal-subtle-empty">{completedTasks.length > 0 ? "当前行动已完成。" : "还没有行动，添加一件想做的事。"}</p> : <ul className="goal-task-list">{activeTasks.map((task) => <ItemRow key={task.taskId} id={task.taskId} title={task.title} actions={taskActions(task)} className="goal-task-row">
-          <input type="checkbox" aria-label={`完成：${task.title}`} checked={false} disabled={busy || !writable} onChange={() => void completeTask(task)} />
-          <div className="goal-task-copy"><button type="button" className="goal-task-title" onClick={() => editTask(task)}>{task.title}<NotesMark notes={task.notes} /></button><span className="goal-task-meta">{taskLocation(task, goal.serverToday)}{task.phaseId && phaseOf(goal, task.phaseId) ? ` · ${phaseOf(goal, task.phaseId)!.title}` : ""}{task.taskId === goal.nextTaskId && <span className="goal-task-next">下一步</span>}</span></div>
-        </ItemRow>)}</ul>}
-        {completedTasks.length > 0 && <details className="goal-completed"><summary>已完成 <span>{completedTasks.length}</span></summary><ul className="goal-task-list">{completedTasks.map((task) => <li key={task.taskId} className="goal-task-row"><span className="goal-completed-check" aria-hidden="true">✓</span><span className="title">{task.title}</span></li>)}</ul></details>}
-      </section>
-    </div>
-    {editor && <GoalEditorDialog item={editor.item} busy={busy} error={error} onClose={() => setEditor(null)} onRefresh={refreshGoalEditor} onSave={(input) => saveGoal(input, editor)} />}
-    {phaseEditor && <PhaseEditorDialog item={phaseEditor.item} busy={busy} error={error} onClose={() => setPhaseEditor(null)} onRefresh={refreshPhaseEditor} onSave={savePhase} />}
-    {addTask && <TaskEditorDialog phases={goal.phases} initialPhaseId={addTask.phaseId} busy={busy} error={error} onClose={() => setAddTask(null)} onRefresh={refreshTaskEditor} onSave={createTask} />}
-    {assignment && <PhaseAssignmentDialog goal={goal} task={assignment.task} busy={busy} error={error} onClose={() => setAssignment(null)} onRefresh={async () => {
-      try {
-        const fresh = await reload();
-        const task = fresh.tasks.find((item) => item.taskId === assignment.task.taskId);
-        if (!task || fresh.state === "ended") {
-          setAssignment(null); setNotice(!task ? "行动已不再关联此目标" : "目标已结束");
-        } else setAssignment({ task, revision: fresh.revision, recoveryGeneration: fresh.recoveryGeneration });
-      } catch (err) { setError(errorMessage(err)); }
-    }} onSave={async (phaseId) => {
-      const changed = await mutate((current) => changeGoal(current.id, { operation: "link-task", taskId: assignment.task.taskId, phaseId, expectedGoalId: current.id, expectedRevision: assignment.revision, recoveryGeneration: assignment.recoveryGeneration }), "行动阶段已更新");
-      if (changed) setAssignment(null);
+        <div>
+          <button
+            className="button-secondary"
+            disabled={busy}
+            onClick={() => setEditor(undefined)}
+          >
+            新建目标
+          </button>
+          <button
+            className="button-primary"
+            disabled={busy}
+            onClick={() => void describe()}
+          >
+            ✦ 描述规划
+          </button>
+        </div>
+      </header>
+      {error && <p className="error">{error}</p>}
+      {draft && (
+        <DraftBanner
+          draft={draft}
+          onRefresh={async () => { setDraft(await getPlanningDraft(draft.id)); await load(); }}
+          onContinue={() =>
+            window.dispatchEvent(
+              new CustomEvent("planner:planning-context", {
+                detail: {
+                  draftId: draft.id,
+                  goalId: null,
+                  selectedPhaseId: previewPhaseId,
+                  expectedDraftRevision: draft.revision,
+                },
+              }),
+            )
+          }
+          onDone={() => {
+            setPreviewId(null);
+            void getPlanningDraft(draft.id).then(setDraft);
+            void load().then(() => onChange?.());
+          }}
+        />
+      )}
+      {!data && !error && <p>加载中…</p>}
+      {data && shown.length === 0 && (
+        <section className="planning-empty">
+          <span>✦</span>
+          <h2>从一个想去的方向开始</h2>
+          <p>例如“明年通过 CCF CSP 认证”。</p>
+          <button className="button-primary" onClick={() => void describe()}>
+            描述我的规划
+          </button>
+        </section>
+      )}
+      {shown.length > 0 && !preview && (
+        <GoalMap
+          goals={shown}
+          changes={draft?.status === "editing" ? draft.changes : undefined}
+          selectedId={previewId}
+          onSelect={(id) =>
+            draft?.status === "editing"
+              ? (setPreviewId(id), setPreviewPhaseId(shown.find((g) => g.id === id)?.focusPhaseId ?? null))
+              : navigate(`/goals/${id}`)
+          }
+        />
+      )}
+      {preview && (
+        <DraftGoalPreview
+          key={preview.id}
+          goal={preview}
+          goals={shown}
+          draft={draft!}
+          onClose={() => { setPreviewId(null); setPreviewPhaseId(null); }}
+          onSelect={setPreviewPhaseId}
+          onChanged={setDraft}
+        />
+      )}
+      {editor !== null && (
+        <GoalEditor
+          goal={editor}
+          goals={data?.items ?? []}
+          busy={busy}
+          onClose={() => setEditor(null)}
+          onSave={save}
+        />
+      )}
+    </main>
+  );
+}
+
+function DraftGoalPreview({ goal, draft, goals, onClose, onChanged, onSelect }: {
+  goal: Goal; draft: PlanningDraft; goals: Goal[]; onClose: () => void;
+  onChanged: (draft: PlanningDraft) => void;
+  onSelect?: (id: string) => void;
+}) {
+  const [selectedId, setSelectedId] = useState<string | null>(draft.selectedPhaseId ?? goal.focusPhaseId);
+  const [goalEditor, setGoalEditor] = useState(false);
+  const [phaseEditor, setPhaseEditor] = useState<GoalPhase | null | undefined>(undefined);
+  const [actionEditor, setActionEditor] = useState<{ action?: GoalAction; phaseId?: string | null } | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const busy = saving || draft.runStatus === "running";
+  const stages = [...goal.phases].sort((a, b) => a.position - b.position);
+  const selected = phase(goal, selectedId) ?? phase(goal, goal.focusPhaseId) ?? stages[0];
+  const trackRef = useStageReveal(selected?.id);
+  const shownActions = goal.actions.filter((a) => !a.discarded && (a.phaseId === (selected?.id ?? null) || a.phaseId === null));
+  const save = async (updated: Goal) => {
+    setSaving(true); setError(null);
+    try {
+      const next = await updatePlanningDraft(draft.id, {
+        operation: "update", expectedRevision: draft.revision, recoveryGeneration: draft.recoveryGeneration,
+        requestId: uid(), document: { goals: draft.document.goals.map((g) => g.id === goal.id ? updated : g) },
+      });
+      onChanged(next);
+      window.dispatchEvent(new CustomEvent("planner:planning-draft-updated", { detail: { draftId: next.id, revision: next.revision } }));
+      return true;
+    } catch (e) { setError(errorMessage(e)); return false; }
+    finally { setSaving(false); }
+  };
+  const selectPhase = (id: string) => {
+    setSelectedId(id);
+    onSelect?.(id);
+    window.dispatchEvent(new CustomEvent("planner:planning-phase-selected", { detail: { draftId: draft.id, selectedPhaseId: id } }));
+  };
+  const stageChange = (patch: Partial<GoalPhase>) => selected && void save({ ...goal, phases: stages.map((p) => p.id === selected.id ? { ...p, ...patch } : p) });
+  const stageMove = (offset: number) => {
+    if (!selected) return;
+    const list = [...stages]; const index = list.findIndex((p) => p.id === selected.id);
+    if (index + offset < 0 || index + offset >= list.length) return;
+    [list[index], list[index + offset]] = [list[index + offset], list[index]];
+    void save({ ...goal, phases: list.map((p, position) => ({ ...p, position })) });
+  };
+  return <section className="draft-goal-preview roadmap-draft" aria-label="草案路线图">
+    <header className="roadmap-heading">
+      <div><span className="page-eyebrow">草案路线图</span><h2>{goal.title}</h2><p>{goal.horizonText || "时间未定"}</p>{goal.notes && <p>{goal.notes}</p>}</div>
+      <div><button className="linkish" disabled={busy} onClick={() => setGoalEditor(true)}>编辑目标</button><button className="linkish" onClick={onClose}>返回目标地图</button></div>
+    </header>
+    {error && <p role="alert" className="error">{error}</p>}
+    <section className="roadmap-track-section">
+      <div className="section-caption"><span>阶段路线</span><button className="linkish" disabled={busy || goal.state === "ended"} onClick={() => setPhaseEditor(null)}>＋ 添加阶段</button></div>
+      <div className="roadmap-track" ref={trackRef}>{stages.map((p, index) => <button key={p.id} className={`roadmap-stage ${p.status}${selected?.id === p.id ? " selected" : ""}`} onClick={() => selectPhase(p.id)} aria-pressed={selected?.id === p.id}>
+        <i>{p.status === "done" ? "✓" : p.status === "skipped" ? "−" : index + 1}</i><b>{p.title}</b><small>{p.horizonText || (p.id === goal.focusPhaseId ? "当前阶段" : stageName(p.status))}</small>
+      </button>)}</div>
+      {!stages.length && <p className="roadmap-actions-empty">可以先记下行动，阶段稍后再补。</p>}
+    </section>
+    <section className="roadmap-focus">
+      <div className="roadmap-focus-head"><div><span className="page-eyebrow">{selected ? selected.id === goal.focusPhaseId ? "当前阶段" : stageName(selected.status) : "下一步行动"}</span><h2>{selected?.title || "从一件小事开始"}</h2>{selected?.outcome && <p className="roadmap-outcome">完成后：{selected.outcome}</p>}{selected?.notes && <p className="roadmap-notes">{selected.notes}</p>}</div>
+      <div><button className="button-secondary" disabled={busy || goal.state === "ended"} onClick={() => setActionEditor({ phaseId: selected?.id ?? null })}>添加行动</button>{selected && <ItemMenu title="草案阶段" actions={[
+        { label: "编辑阶段", disabled: busy || selected.status === "done", run: () => setPhaseEditor(selected) },
+        { label: "设为当前阶段", disabled: busy || selected.status !== "open", run: () => void save({ ...goal, focusPhaseId: selected.id }) },
+        { label: "向前移动", disabled: busy || stages[0]?.id === selected.id, run: () => stageMove(-1) },
+        { label: "向后移动", disabled: busy || stages.at(-1)?.id === selected.id, run: () => stageMove(1) },
+        { label: selected.status === "skipped" ? "重新打开阶段" : "跳过阶段", disabled: busy || selected.status === "done", run: () => stageChange({ status: selected.status === "skipped" ? "open" : "skipped" }) },
+      ]} />}</div></div>
+      {!shownActions.length && <p className="roadmap-actions-empty">远期阶段可以先只保留成果。</p>}
+      <ul className="roadmap-action-list">{shownActions.map((a) => <li key={a.id} className={nextGoalAction(goal)?.id === a.id ? "is-next" : ""}><div><i>{a.completed ? "✓" : "○"}</i><button disabled={!!a.taskId || busy} onClick={() => setActionEditor({ action: a })}>{a.title}</button>{a.notes && <p>{a.notes}</p>}<small>{a.completed ? "已完成" : a.taskId ? "已关联任务" : "规划行动"}{nextGoalAction(goal)?.id === a.id ? " · 下一步" : ""}</small></div><ItemMenu title="草案行动" actions={[
+        { label: "编辑行动", disabled: busy || !!a.taskId, run: () => setActionEditor({ action: a }) },
+        { label: a.id === goal.nextActionId ? "取消下一步" : "设为下一步", disabled: busy || !!a.taskId || !!goal.nextTaskId, run: () => void save({ ...goal, nextActionId: a.id === goal.nextActionId ? null : a.id }) },
+        { label: "移除行动", disabled: busy || !!a.taskId, danger: true, run: () => void save({ ...goal, actions: goal.actions.filter((item) => item.id !== a.id) }) },
+      ]} /></li>)}</ul>
+    </section>
+    {goalEditor && <GoalEditor goal={goal} goals={goals} busy={busy} onClose={() => setGoalEditor(false)} onSave={async (v) => { if (await save({ ...goal, ...v })) setGoalEditor(false); }} />}
+    {phaseEditor !== undefined && <PhaseEditor phase={phaseEditor ?? undefined} busy={busy} onClose={() => setPhaseEditor(undefined)} onSave={async (v) => {
+      const updated = phaseEditor ? { ...phaseEditor, ...v } : { id: uid(), goalId: goal.id, position: stages.length, ...v };
+      if (await save({ ...goal, phases: phaseEditor ? stages.map((p) => p.id === updated.id ? updated : p) : [...stages, updated] })) { setPhaseEditor(undefined); selectPhase(updated.id); }
     }} />}
-    {taskPicker && <GoalTaskPicker goal={goal} mode={taskPicker} busy={busy} operationError={error} onClose={() => setTaskPicker(null)} onPick={async (task) => {
-      const changed = taskPicker === "next" ? await action("next", { taskId: task.taskId }, "下一步已更新") : await action("link-task", { taskId: task.taskId, phaseId: focused?.id ?? null, expectedGoalId: task.goalId }, "行动已关联");
-      if (changed) setTaskPicker(null);
+    {actionEditor && <ActionEditor action={actionEditor.action} phases={stages} phaseId={actionEditor.phaseId} busy={busy} onClose={() => setActionEditor(null)} onSave={async (v) => {
+      const updated: GoalAction = actionEditor.action ? { ...actionEditor.action, ...v } : { ...v, id: uid(), goalId: goal.id, position: goal.actions.length, taskId: null, scheduledDate: null, completed: false, discarded: false };
+      if (await save({ ...goal, actions: actionEditor.action ? goal.actions.map((a) => a.id === updated.id ? updated : a) : [...goal.actions, updated] })) setActionEditor(null);
     }} />}
+  </section>;
+}
+
+export function GoalDetailPage({
+  id,
+  onChange,
+  onRecoveryGeneration,
+  refreshToken,
+}: {
+  id: string;
+  onChange?: () => void;
+  onRecoveryGeneration?: (generation: string | null) => void;
+  refreshToken?: number;
+}) {
+  const [goal, setGoal] = useState<GoalResponse | null>(null);
+  const [all, setAll] = useState<Goal[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const trackRef = useStageReveal(selectedId ?? goal?.focusPhaseId ?? goal?.phases[0]?.id);
+  const [goalEditor, setGoalEditor] = useState<Goal | undefined | null>(null);
+  const [phaseEditor, setPhaseEditor] = useState<GoalPhase | null | undefined>(
+    undefined,
+  );
+  const [actionEditor, setActionEditor] = useState<{
+    action?: GoalAction;
+    phaseId?: string | null;
+  } | null>(null);
+  const [link, setLink] = useState<GoalAction | null>(null);
+  const [draft, setDraft] = useState<PlanningDraft | null>(null);
+  const load = async () => {
+    const [g, list] = await Promise.all([getGoal(id), listGoals()]);
+    setGoal(g);
+    setAll(list.items);
+    onRecoveryGeneration?.(g.recoveryGeneration);
+    return g;
+  };
+  useEffect(() => {
+    void load().catch((e) => setError(errorMessage(e)));
+  }, [id, refreshToken]);
+  useEffect(() => {
+    setDraft(null); setSelectedId(null); setError(null);
+    setGoalEditor(null); setPhaseEditor(undefined); setActionEditor(null); setLink(null);
+  }, [id]);
+
+  useEffect(() => {
+    void listPlanningDrafts(id)
+      .then((value) => {
+        const editing = value.items.find((item) => item.status === "editing") ?? value.items.find((item) => item.status === "applied");
+        setDraft(editing ?? null);
+      })
+      .catch(() => undefined);
+    const refreshDraft = (event: Event) => {
+      const detail = (event as CustomEvent<{ draftId?: string }>).detail;
+      if (detail?.draftId)
+        void getPlanningDraft(detail.draftId)
+          .then((item) => {
+            if (item.scopeGoalId === id) setDraft(item);
+          })
+          .catch(() => undefined);
+    };
+    window.addEventListener("planner:planning-draft-updated", refreshDraft);
+    return () =>
+      window.removeEventListener(
+        "planner:planning-draft-updated",
+        refreshDraft,
+      );
+  }, [id]);
+  const mutate = async (operation: string, body: Record<string, unknown>) => {
+    if (!goal) return null;
+    setBusy(true);
+    setError(null);
+    try {
+      const g = await changeGoal(goal.id, {
+        operation: operation as never,
+        expectedRevision: goal.revision,
+        recoveryGeneration: goal.recoveryGeneration,
+        ...body,
+      });
+      setGoal(g);
+      onChange?.();
+      window.dispatchEvent(new Event("planner:items-changed"));
+      return g;
+    } catch (e) {
+      setError(errorMessage(e));
+      return null;
+    } finally {
+      setBusy(false);
+    }
+  };
+  const describe = async () => {
+    if (!goal) return;
+    setBusy(true);
+    try {
+      const d = draft?.status === "editing" ? await getPlanningDraft(draft.id) : await createPlanningDraft({
+        goalId: goal.id,
+        selectedPhaseId: selectedId,
+        requestId: uid(),
+        recoveryGeneration: goal.recoveryGeneration,
+      });
+      setDraft(d);
+      window.dispatchEvent(
+        new CustomEvent("planner:planning-context", {
+          detail: {
+            draftId: d.id,
+            goalId: goal.id,
+            selectedPhaseId: selectedId,
+            expectedDraftRevision: d.revision,
+          },
+        }),
+      );
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (!goal && !error)
+    return (
+      <main className="page">
+        <p>加载中…</p>
+      </main>
+    );
+  if (!goal)
+    return (
+      <main className="page">
+        <p className="error">{error}</p>
+      </main>
+    );
+  const visibleGoal =
+    draft?.status === "editing"
+      ? ((draft.document.goals.find((item) => item.id === goal.id) as
+          Goal | undefined) ?? goal)
+      : goal;
+  if (draft?.status === "editing") return <main className="page roadmap-page">
+    <div className="goal-back"><a href="/goals" onClick={(e) => handleNavClick(e, "/goals")}>‹ 全部规划</a></div>
+    <DraftBanner draft={draft} onRefresh={async () => { setDraft(await getPlanningDraft(draft.id)); await load(); }}
+      onDone={() => { void getPlanningDraft(draft.id).then(setDraft); void load(); }}
+      onContinue={() => window.dispatchEvent(new CustomEvent("planner:planning-context", { detail: { draftId: draft.id, goalId: goal.id, selectedPhaseId: selectedId, expectedDraftRevision: draft.revision } }))} />
+    <DraftGoalPreview key={visibleGoal.id} goal={visibleGoal} goals={all} draft={draft} onChanged={setDraft} onSelect={setSelectedId} onClose={() => navigate("/goals")} />
   </main>;
+  const stages = [...visibleGoal.phases].sort(
+    (a, b) => a.position - b.position,
+  );
+  const selected =
+    phase(visibleGoal, selectedId) ??
+    phase(visibleGoal, visibleGoal.focusPhaseId) ??
+    stages.find((p) => p.status === "open") ??
+    stages[0];
+  const actions = visibleGoal.actions
+    .filter(
+      (a) =>
+        !a.discarded &&
+        (a.phaseId === (selected?.id ?? null) || a.phaseId === null),
+    )
+    .sort((a, b) => a.position - b.position);
+  const goalMenu: ItemAction[] = [
+    { label: "编辑目标", disabled: busy, run: () => setGoalEditor(goal) },
+    {
+      label: goal.state === "active" ? "暂停目标" : "恢复目标",
+      disabled: busy,
+      separator: true,
+      run: () =>
+        void mutate("state", {
+          state: goal.state === "active" ? "paused" : "active",
+          endReason: null,
+        }),
+    },
+    ...(goal.state !== "ended"
+      ? [
+          {
+            label: "标记已达成",
+            disabled: busy,
+            run: () =>
+              void mutate("state", { state: "ended", endReason: "achieved" }),
+          },
+        ]
+      : []),
+  ];
+  return (
+    <main className="page goal-detail-page roadmap-page">
+      <div className="goal-back">
+        <a href="/goals" onClick={(e) => handleNavClick(e, "/goals")}>
+          ‹ 全部规划
+        </a>
+        {goalPath(all, goal.id).slice(0, -1).map((ancestor) => <span key={ancestor.id}> / <a href={`/goals/${ancestor.id}`} onClick={(e) => handleNavClick(e, `/goals/${ancestor.id}`)}>{ancestor.title}</a></span>)}
+      </div>
+      <header className="roadmap-heading">
+        <div>
+          <span className="page-eyebrow">路线图</span>
+          <h1>{goal.title}</h1>
+          <p className="roadmap-meta">
+            <span data-state={goal.state}>
+              {goal.state === "active"
+                ? "进行中"
+                : goal.state === "paused"
+                  ? "已暂停"
+                  : "已结束"}
+            </span>
+            {goal.horizonText && <span>{goal.horizonText}</span>}
+            {goal.parentGoalId && (
+              <a
+                href={`/goals/${goal.parentGoalId}`}
+                onClick={(e) =>
+                  handleNavClick(e, `/goals/${goal.parentGoalId!}`)
+                }
+              >
+                支持的目标 ↗
+              </a>
+            )}
+          </p>
+          {goal.notes && <p className="roadmap-notes">{goal.notes}</p>}
+        </div>
+        <div>
+          <button
+            className="button-secondary"
+            disabled={busy}
+            onClick={() => void describe()}
+          >
+            ✦ 调整规划
+          </button>
+          <ItemMenu title="目标" actions={goalMenu} />
+        </div>
+      </header>
+      {error && <p className="error">{error}</p>}
+      {draft && (
+        <DraftBanner
+          draft={draft}
+          onRefresh={async () => { setDraft(await getPlanningDraft(draft.id)); await load(); }}
+          onContinue={() =>
+            window.dispatchEvent(
+              new CustomEvent("planner:planning-context", {
+                detail: {
+                  draftId: draft.id,
+                  goalId: id,
+                  selectedPhaseId: selected?.id ?? draft.selectedPhaseId ?? null,
+                  expectedDraftRevision: draft.revision,
+                },
+              }),
+            )
+          }
+          onDone={() => {
+            void getPlanningDraft(draft.id).then(setDraft);
+            void load();
+          }}
+        />
+      )}
+      <section className="roadmap-track-section">
+        <div className="section-caption">
+          <span>阶段路线</span>
+          <button
+            className="linkish"
+            disabled={busy}
+            onClick={() => setPhaseEditor(null)}
+          >
+            ＋ 添加阶段
+          </button>
+        </div>
+        {stages.length ? (
+          <div className="roadmap-track" ref={trackRef}>
+            {stages.map((p, i) => (
+              <button
+                className={`roadmap-stage ${p.status}${selected?.id === p.id ? " selected" : ""}`}
+                onClick={() => {
+                  setSelectedId(p.id);
+                  window.dispatchEvent(
+                    new CustomEvent("planner:planning-phase-selected", {
+                      detail: { goalId: id, selectedPhaseId: p.id },
+                    }),
+                  );
+                }}
+                key={p.id}
+                aria-pressed={selected?.id === p.id}
+              >
+                <i>
+                  {p.status === "done"
+                    ? "✓"
+                    : p.status === "skipped"
+                      ? "−"
+                      : i + 1}
+                </i>
+                <b>{p.title}</b>
+                <small>{p.horizonText || (p.id === visibleGoal.focusPhaseId ? "当前阶段" : stageName(p.status))}</small>
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div className="roadmap-empty">
+            路线还没有阶段。
+            <button
+              className="button-secondary"
+              onClick={() => setPhaseEditor(null)}
+            >
+              添加第一个阶段
+            </button>
+          </div>
+        )}
+      </section>
+      {selected && (
+        <section className="roadmap-focus">
+          <div className="roadmap-focus-head">
+            <div>
+              <span className="page-eyebrow">
+                {selected.id === goal.focusPhaseId
+                  ? "当前阶段"
+                  : stageName(selected.status)}
+              </span>
+              <h2>{selected.title}</h2>
+              {selected.outcome && (
+                <p className="roadmap-outcome">完成后：{selected.outcome}</p>
+              )}
+              {selected.notes && (
+                <p className="roadmap-notes">{selected.notes}</p>
+              )}
+            </div>
+            <div>
+              <button
+                className="button-secondary"
+                disabled={busy || goal.state === "ended"}
+                onClick={() => setActionEditor({ phaseId: selected.id })}
+              >
+                添加行动
+              </button>
+              <ItemMenu
+                title="阶段"
+                actions={[
+                  {
+                    label: "编辑阶段",
+                    disabled: busy,
+                    run: () => setPhaseEditor(selected),
+                  },
+                  {
+                    label:
+                      selected.id === goal.focusPhaseId
+                        ? "取消当前阶段"
+                        : "设为当前阶段",
+                    disabled: busy,
+                    run: () =>
+                      void mutate("focus-phase", {
+                        phaseId:
+                          selected.id === goal.focusPhaseId
+                            ? null
+                            : selected.id,
+                      }),
+                  },
+                  {
+                    label:
+                      selected.status === "done"
+                        ? "重新打开阶段"
+                        : "标记阶段完成",
+                    disabled: busy,
+                    separator: true,
+                    run: () =>
+                      void mutate("edit-phase", {
+                        phaseId: selected.id,
+                        title: selected.title,
+                        notes: selected.notes,
+                        outcome: selected.outcome,
+                        horizonText: selected.horizonText,
+                        status: selected.status === "done" ? "open" : "done",
+                      }),
+                  },
+                  {
+                    label:
+                      selected.status === "skipped"
+                        ? "重新打开阶段"
+                        : "跳过阶段",
+                    disabled: busy,
+                    run: () =>
+                      void mutate("edit-phase", {
+                        phaseId: selected.id,
+                        title: selected.title,
+                        notes: selected.notes,
+                        outcome: selected.outcome,
+                        horizonText: selected.horizonText,
+                        status: selected.status === "skipped" ? "open" : "skipped",
+                      }),
+                  },
+                  {
+                    label: "前移阶段",
+                    disabled: busy || stages.indexOf(selected) === 0,
+                    separator: true,
+                    run: () => {
+                      const ids = stages.map((item) => item.id);
+                      const index = ids.indexOf(selected.id);
+                      [ids[index - 1], ids[index]] = [ids[index], ids[index - 1]];
+                      void mutate("reorder-phases", { phaseIds: ids });
+                    },
+                  },
+                  {
+                    label: "后移阶段",
+                    disabled: busy || stages.indexOf(selected) === stages.length - 1,
+                    run: () => {
+                      const ids = stages.map((item) => item.id);
+                      const index = ids.indexOf(selected.id);
+                      [ids[index], ids[index + 1]] = [ids[index + 1], ids[index]];
+                      void mutate("reorder-phases", { phaseIds: ids });
+                    },
+                  },
+                ]}
+              />
+            </div>
+          </div>
+          <ActionList
+            actions={actions}
+            canSchedule={goal.state === "active"}
+            nextId={nextGoalAction(goal)?.id ?? null}
+            today={goal.serverToday}
+            busy={busy}
+            onEdit={(a) => a.taskId ? openItemEditor({ id: a.taskId, kind: "task", title: a.title, notes: a.notes, writable: true }) : setActionEditor({ action: a })}
+            onToday={(a) =>
+              void mutate("materialize-action", {
+                actionId: a.id,
+                destination: "today",
+                requestId: uid(),
+              })
+            }
+            onInventory={(a) =>
+              void mutate("materialize-action", {
+                actionId: a.id,
+                destination: "inventory",
+                requestId: uid(),
+              })
+            }
+            onLink={setLink}
+            onNext={(a) =>
+              void mutate("next-action", {
+                actionId: nextGoalAction(goal)?.id === a.id ? null : a.id,
+              })
+            }
+            onRemove={(a) => void mutate("remove-action", { actionId: a.id })}
+          />
+        </section>
+      )}
+      {!selected && (
+        <section className="roadmap-focus">
+          <div className="roadmap-focus-head">
+            <div><span className="page-eyebrow">行动</span><h2>先从一件小事开始</h2></div>
+            <button className="button-secondary" disabled={busy || goal.state === "ended"} onClick={() => setActionEditor({ phaseId: null })}>添加行动</button>
+          </div>
+          <ActionList actions={actions} canSchedule={goal.state === "active"} nextId={nextGoalAction(goal)?.id ?? null} today={goal.serverToday} busy={busy}
+            onEdit={(item) => item.taskId ? openItemEditor({ id: item.taskId, kind: "task", title: item.title, notes: item.notes, writable: true }) : setActionEditor({ action: item })}
+            onToday={(item) => void mutate("materialize-action", { actionId: item.id, destination: "today", requestId: uid() })}
+            onInventory={(item) => void mutate("materialize-action", { actionId: item.id, destination: "inventory", requestId: uid() })}
+            onLink={setLink}
+            onNext={(item) => void mutate("next-action", { actionId: nextGoalAction(goal)?.id === item.id ? null : item.id })}
+            onRemove={(item) => void mutate("remove-action", { actionId: item.id })}
+          />
+        </section>
+      )}
+      {goalEditor !== null && (
+        <GoalEditor
+          goal={goalEditor}
+          goals={all}
+          busy={busy}
+          onClose={() => setGoalEditor(null)}
+          onSave={async (v) => {
+            const { parentGoalId, ...edit } = v;
+            const saved = await mutate("edit", edit);
+            if (saved) {
+              try {
+                const linked = parentGoalId === saved.parentGoalId ? saved : await changeGoal(saved.id, {
+                  operation: "set-parent", parentGoalId, expectedRevision: saved.revision,
+                  recoveryGeneration: saved.recoveryGeneration,
+                });
+                setGoal(linked); setGoalEditor(null);
+                window.dispatchEvent(new Event("planner:items-changed"));
+              } catch (e) { setError(errorMessage(e)); }
+            }
+          }}
+        />
+      )}
+      {phaseEditor !== undefined && (
+        <PhaseEditor
+          phase={phaseEditor ?? undefined}
+          busy={busy}
+          onClose={() => setPhaseEditor(undefined)}
+          onSave={async (v) => {
+            if (
+              await mutate(
+                phaseEditor ? "edit-phase" : "add-phase",
+                phaseEditor
+                  ? { phaseId: phaseEditor.id, ...v }
+                  : { title: v.title, notes: v.notes, outcome: v.outcome, horizonText: v.horizonText, requestId: uid() },
+              )
+            )
+              setPhaseEditor(undefined);
+          }}
+        />
+      )}
+      {actionEditor && (
+        <ActionEditor
+          action={actionEditor.action}
+          phases={stages}
+          phaseId={actionEditor.phaseId}
+          busy={busy}
+          onClose={() => setActionEditor(null)}
+          onSave={async (v) => {
+            if (
+              await mutate(
+                actionEditor.action ? "edit-action" : "add-action",
+                actionEditor.action
+                  ? { actionId: actionEditor.action.id, ...v }
+                  : { ...v, requestId: uid() },
+              )
+            )
+              setActionEditor(null);
+          }}
+        />
+      )}
+      {link && (
+        <LinkDialog
+          action={link}
+          busy={busy}
+          onClose={() => setLink(null)}
+          onPick={async (task) => {
+            if (
+              await mutate("link-action", {
+                actionId: link.id,
+                taskId: task.taskId,
+                expectedTaskId: link.taskId,
+              })
+            )
+              setLink(null);
+          }}
+        />
+      )}
+    </main>
+  );
 }
 
-function GoalEditorDialog({ item, busy, error, onClose, onRefresh, onSave }: { item?: Goal; busy: boolean; error?: string | null; onClose: () => void; onRefresh?: () => Promise<void>; onSave: (input: { title: string; notes: string; horizonText: string }) => void }) {
-  const [title, setTitle] = useState(item?.title ?? ""); const [notes, setNotes] = useState(item?.notes ?? ""); const [horizonText, setHorizonText] = useState(item?.horizonText ?? "");
-  const keyboard = useEntryKeyboard(onClose);
-  return <Modal className="goal-dialog" label={item ? "编辑目标" : "新建目标"} onClose={onClose}><div className="modal-heading"><span>{item ? "编辑目标" : "新建目标"}</span><button type="button" className="icon-button" aria-label="关闭" disabled={busy} onClick={onClose}>×</button></div><form className="goal-editor" onSubmit={(event: FormEvent) => { event.preventDefault(); if (!keyboard.shouldIgnoreSubmit() && title.trim()) onSave({ title: title.trim(), notes: notes.trim(), horizonText: horizonText.trim() }); }}>
-    {error && <p className="error" role="alert">{error}</p>}<label>目标名称<input data-autofocus {...keyboard.bind} value={title} maxLength={200} required onChange={(event) => setTitle(event.target.value)} placeholder="例如：通过 CCF CSP 认证" /></label>
-    <label>大致时间（可选）<input placeholder="例如：明年、下半年" {...keyboard.bind} value={horizonText} maxLength={100} onChange={(event) => setHorizonText(event.target.value)} /></label>
-    <label>备注（可选）<textarea rows={4} value={notes} maxLength={10000} onChange={(event) => setNotes(event.target.value)} placeholder="写下你想记住的方向或标准" /></label>
-    <div className="modal-footer">{error && onRefresh ? <button type="button" className="linkish" disabled={busy} onClick={() => void onRefresh()}>刷新并保留草稿</button> : null}<button type="button" className="linkish" disabled={busy} onClick={onClose}>取消</button><button className="button-primary" type="submit" onClick={keyboard.allowSubmit} disabled={busy || !title.trim()}>{busy ? "正在保存…" : "保存"}</button></div>
-  </form></Modal>;
+function ActionList({
+  actions,
+  nextId,
+  today,
+  busy,
+  canSchedule = true,
+  onEdit,
+  onToday,
+  onInventory,
+  onLink,
+  onNext,
+  onRemove,
+}: {
+  actions: GoalAction[];
+  nextId: string | null;
+  today: string;
+  busy: boolean;
+  canSchedule?: boolean;
+  onEdit: (a: GoalAction) => void;
+  onToday: (a: GoalAction) => void;
+  onInventory: (a: GoalAction) => void;
+  onLink: (a: GoalAction) => void;
+  onNext: (a: GoalAction) => void;
+  onRemove: (a: GoalAction) => void;
+}) {
+  if (!actions.length)
+    return (
+      <p className="roadmap-actions-empty">
+        这里还没有行动。远期阶段可以先只保留成果。
+      </p>
+    );
+  return (
+    <ul className="roadmap-action-list">
+      {actions.map((a) => (
+        <li
+          className={`${a.completed ? "completed" : ""}${a.id === nextId ? " is-next" : ""}`}
+          key={a.id}
+        >
+          <div>
+            <i>{a.completed ? "✓" : "○"}</i>
+            <button onClick={() => onEdit(a)}>{a.title}</button>
+            {a.notes && <p>{a.notes}</p>}
+            <small>
+              {a.completed
+                ? "已完成"
+                : a.scheduledDate === today
+                  ? "已在今天"
+                  : a.scheduledDate || (a.taskId ? "待办" : "尚未加入待办")}
+              {a.id === nextId && " · 下一步"}
+            </small>
+          </div>
+          <div>
+            {a.scheduledDate === today ? (
+              <a href="/" onClick={(e) => handleNavClick(e, "/")}>
+                查看今天
+              </a>
+            ) : (
+              !a.completed && (
+                <button
+                  className="button-primary small"
+                  disabled={busy || !canSchedule}
+                  onClick={() => onToday(a)}
+                >
+                  加入今天
+                </button>
+              )
+            )}
+            <ItemMenu
+              title="行动"
+              actions={[
+                { label: "编辑行动", disabled: busy, run: () => onEdit(a) },
+                {
+                  label: a.id === nextId ? "取消下一步" : "设为下一步",
+                  disabled: busy || a.completed,
+                  run: () => onNext(a),
+                },
+                {
+                  label: "加入待办",
+                  disabled: busy || a.completed || !!a.taskId,
+                  separator: true,
+                  run: () => onInventory(a),
+                },
+                {
+                  label: "关联已有待办",
+                  disabled: busy || a.completed || !!a.taskId,
+                  run: () => onLink(a),
+                },
+                {
+                  label: "移除行动",
+                  disabled: busy || !!a.taskId,
+                  danger: true,
+                  run: () => onRemove(a),
+                },
+              ]}
+            />
+          </div>
+        </li>
+      ))}
+    </ul>
+  );
 }
 
-function PhaseEditorDialog({ item, busy, error, onClose, onRefresh, onSave }: { item?: GoalPhase; busy: boolean; error?: string | null; onClose: () => void; onRefresh?: () => Promise<void>; onSave: (input: { title: string; notes: string; status: GoalPhaseStatus }) => void }) {
-  const [title, setTitle] = useState(item?.title ?? ""); const [notes, setNotes] = useState(item?.notes ?? ""); const [status, setStatus] = useState<GoalPhaseStatus>(item?.status ?? "open");
-  const keyboard = useEntryKeyboard(onClose);
-  return <Modal className="goal-dialog" label={item ? "编辑阶段" : "添加阶段"} onClose={onClose}><div className="modal-heading"><span>{item ? "编辑阶段" : "添加阶段"}</span><button type="button" className="icon-button" aria-label="关闭" disabled={busy} onClick={onClose}>×</button></div><form className="goal-editor" onSubmit={(event) => { event.preventDefault(); if (!keyboard.shouldIgnoreSubmit() && title.trim()) onSave({ title: title.trim(), notes: notes.trim(), status }); }}>
-    {error && <p className="error" role="alert">{error}</p>}<label>阶段名称<input data-autofocus {...keyboard.bind} value={title} maxLength={200} required onChange={(event) => setTitle(event.target.value)} placeholder="例如：基础准备" /></label>
-    <label>说明（可选）<textarea rows={3} value={notes} maxLength={10000} onChange={(event) => setNotes(event.target.value)} /></label>
-    {item && <label>状态<select value={status} onChange={(event) => setStatus(event.target.value as GoalPhaseStatus)}><option value="open">进行中</option><option value="done">已完成</option><option value="skipped">已跳过</option></select></label>}
-    <div className="modal-footer">{error && onRefresh ? <button type="button" className="linkish" disabled={busy} onClick={() => void onRefresh()}>刷新并保留草稿</button> : null}<button type="button" className="linkish" disabled={busy} onClick={onClose}>取消</button><button className="button-primary" type="submit" onClick={keyboard.allowSubmit} disabled={busy || !title.trim()}>{busy ? "正在保存…" : "保存"}</button></div>
-  </form></Modal>;
+type GoalInput = {
+  title: string;
+  notes: string;
+  horizonText: string;
+  parentGoalId: string | null;
+};
+function GoalEditor({
+  goal,
+  goals,
+  busy,
+  onClose,
+  onSave,
+}: {
+  goal?: Goal;
+  goals: Goal[];
+  busy: boolean;
+  onClose: () => void;
+  onSave: (v: GoalInput) => void;
+}) {
+  const formKeys = usePlannerFormKeyboard();
+  const [title, setTitle] = useState(goal?.title ?? "");
+  const [notes, setNotes] = useState(goal?.notes ?? "");
+  const [horizonText, setHorizon] = useState(goal?.horizonText ?? "");
+  const [parentGoalId, setParent] = useState(goal?.parentGoalId ?? "");
+  return (
+    <Modal label="目标" className="goal-dialog" onClose={onClose}>
+      <div className="modal-heading">
+        <span>{goal ? "编辑目标" : "新建目标"}</span>
+        <button className="icon-button" onClick={onClose}>
+          ×
+        </button>
+      </div>
+      <form {...formKeys}
+        className="goal-editor"
+        onSubmit={(e: FormEvent) => {
+          e.preventDefault();
+          if (title.trim())
+            onSave({
+              title: title.trim(),
+              notes: notes.trim(),
+              horizonText: horizonText.trim(),
+              parentGoalId: parentGoalId || null,
+            });
+        }}
+      >
+        <label>
+          目标名称
+          <input
+            data-autofocus
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+          />
+        </label>
+        <label>
+          大致时间（可选）
+          <input
+            value={horizonText}
+            onChange={(e) => setHorizon(e.target.value)}
+            placeholder="例如：明年 / 本学期"
+          />
+        </label>
+        <label>
+          主要支持哪个目标（可选）
+          <select
+            value={parentGoalId}
+            onChange={(e) => setParent(e.target.value)}
+          >
+            <option value="">独立目标</option>
+            {goals
+              .filter((g) => g.id !== goal?.id)
+              .map((g) => (
+                <option value={g.id} key={g.id}>
+                  {g.title}
+                </option>
+              ))}
+          </select>
+        </label>
+        <label>
+          说明（可选）
+          <textarea value={notes} onChange={(e) => setNotes(e.target.value)} />
+        </label>
+        <div className="modal-footer">
+          <button className="linkish" type="button" onClick={onClose}>
+            取消
+          </button>
+          <button className="button-primary" disabled={busy}>
+            保存
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
 }
-
-function PhaseAssignmentDialog({ goal, task, busy, error, onClose, onRefresh, onSave }: { goal: GoalResponse; task: GoalTask; busy: boolean; error: string | null; onClose: () => void; onRefresh: () => Promise<void>; onSave: (phaseId: string | null) => void }) {
-  const [phaseId, setPhaseId] = useState(task.phaseId ?? "");
-  const current = phaseOf(goal, phaseId);
-  return <Modal className="goal-dialog" label="调整所属阶段" onClose={onClose}>
-    <div className="modal-heading"><span>调整所属阶段</span><button type="button" className="icon-button" aria-label="关闭" disabled={busy} onClick={onClose}>×</button></div>
-    <form className="goal-editor" onSubmit={(event) => { event.preventDefault(); onSave(phaseId || null); }}>
-      <p className="goal-assignment-title">{task.title}</p>
-      {error && <p className="error" role="alert">{error}</p>}
-      <label>所属阶段<select data-autofocus value={phaseId} disabled={busy} onChange={(event) => setPhaseId(event.target.value)}>
-        <option value="">不指定阶段</option>
-        {current && current.status !== "open" && <option value={current.id} disabled>{current.title}（{phaseText(current.status)}）</option>}
-        {goal.phases.filter((phase) => phase.status === "open").map((phase) => <option key={phase.id} value={phase.id}>{phase.title}</option>)}
-      </select></label>
-      <div className="modal-footer">{error && <button type="button" className="linkish" disabled={busy} onClick={() => void onRefresh()}>刷新并保留草稿</button>}<button type="button" className="linkish" disabled={busy} onClick={onClose}>取消</button><button className="button-primary" disabled={busy || phaseId === (task.phaseId ?? "") || Boolean(current && current.status !== "open")}>保存</button></div>
-    </form>
-  </Modal>;
+function PhaseEditor({
+  phase,
+  busy,
+  onClose,
+  onSave,
+}: {
+  phase?: GoalPhase;
+  busy: boolean;
+  onClose: () => void;
+  onSave: (v: {
+    title: string;
+    notes: string;
+    outcome: string;
+    horizonText: string;
+    status: GoalPhaseStatus;
+  }) => void;
+}) {
+  const formKeys = usePlannerFormKeyboard();
+  const [title, setTitle] = useState(phase?.title ?? "");
+  const [notes, setNotes] = useState(phase?.notes ?? "");
+  const [outcome, setOutcome] = useState(phase?.outcome ?? "");
+  const [horizonText, setHorizon] = useState(phase?.horizonText ?? "");
+  const [status, setStatus] = useState<GoalPhaseStatus>(
+    phase?.status ?? "open",
+  );
+  return (
+    <Modal label="阶段" className="goal-dialog" onClose={onClose}>
+      <div className="modal-heading">
+        <span>{phase ? "编辑阶段" : "添加阶段"}</span>
+        <button className="icon-button" onClick={onClose}>
+          ×
+        </button>
+      </div>
+      <form {...formKeys}
+        className="goal-editor"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (title.trim())
+            onSave({
+              title: title.trim(),
+              notes: notes.trim(),
+              outcome: outcome.trim(),
+              horizonText: horizonText.trim(),
+              status,
+            });
+        }}
+      >
+        <label>
+          阶段名称
+          <input
+            data-autofocus
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+          />
+        </label>
+        <label>
+          完成后会怎样
+          <input
+            value={outcome}
+            onChange={(e) => setOutcome(e.target.value)}
+            placeholder="例如：完成一次模拟"
+          />
+        </label>
+        <label>
+          大致时间（可选）
+          <input
+            value={horizonText}
+            onChange={(e) => setHorizon(e.target.value)}
+          />
+        </label>
+        <label>
+          说明（可选）
+          <textarea value={notes} onChange={(e) => setNotes(e.target.value)} />
+        </label>
+        {phase && (
+          <label>
+            状态
+            <select
+              value={status}
+              onChange={(e) => setStatus(e.target.value as GoalPhaseStatus)}
+            >
+              <option value="open">进行中</option>
+              <option value="done">已完成</option>
+              <option value="skipped">已跳过</option>
+            </select>
+          </label>
+        )}
+        <div className="modal-footer">
+          <button type="button" className="linkish" onClick={onClose}>
+            取消
+          </button>
+          <button className="button-primary" disabled={busy}>
+            保存
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
 }
-
-function TaskEditorDialog({ phases, initialPhaseId, busy, error, onClose, onRefresh, onSave }: { phases: GoalPhase[]; initialPhaseId: string | null; busy: boolean; error?: string | null; onClose: () => void; onRefresh?: () => Promise<void>; onSave: (input: { title: string; notes: string; phaseId: string | null }) => void }) {
-  const [title, setTitle] = useState(""); const [notes, setNotes] = useState(""); const [phaseId, setPhaseId] = useState(initialPhaseId ?? "");
-  const openPhases = phases.filter((phase) => phase.status === "open");
-  const keyboard = useEntryKeyboard(onClose);
-  return <Modal className="goal-dialog" label="添加行动" onClose={onClose}><div className="modal-heading"><span>添加行动</span><button type="button" className="icon-button" aria-label="关闭" disabled={busy} onClick={onClose}>×</button></div><form className="goal-editor" onSubmit={(event) => { event.preventDefault(); if (!keyboard.shouldIgnoreSubmit() && title.trim()) onSave({ title: title.trim(), notes: notes.trim(), phaseId: phaseId || null }); }}>
-    {error && <p className="error" role="alert">{error}</p>}<label>行动<input data-autofocus {...keyboard.bind} value={title} maxLength={200} required onChange={(event) => setTitle(event.target.value)} placeholder="例如：完成一套真题" /></label>
-    <label>备注（可选）<textarea rows={3} value={notes} maxLength={10000} onChange={(event) => setNotes(event.target.value)} /></label>
-    {openPhases.length > 0 && <label>所属阶段<select value={phaseId} onChange={(event) => setPhaseId(event.target.value)}><option value="">不指定阶段</option>{openPhases.map((phase) => <option key={phase.id} value={phase.id}>{phase.title}</option>)}</select></label>}
-    <div className="modal-footer">{error && onRefresh ? <button type="button" className="linkish" disabled={busy} onClick={() => void onRefresh()}>刷新并保留草稿</button> : null}<button type="button" className="linkish" disabled={busy} onClick={onClose}>取消</button><button className="button-primary" type="submit" onClick={keyboard.allowSubmit} disabled={busy || !title.trim()}>{busy ? "正在添加…" : "添加"}</button></div>
-  </form></Modal>;
+function ActionEditor({
+  action,
+  phases,
+  phaseId,
+  busy,
+  onClose,
+  onSave,
+}: {
+  action?: GoalAction;
+  phases: GoalPhase[];
+  phaseId?: string | null;
+  busy: boolean;
+  onClose: () => void;
+  onSave: (v: { title: string; notes: string; phaseId: string | null }) => void;
+}) {
+  const formKeys = usePlannerFormKeyboard();
+  const [title, setTitle] = useState(action?.title ?? "");
+  const [notes, setNotes] = useState(action?.notes ?? "");
+  const [stage, setStage] = useState(action?.phaseId ?? phaseId ?? "");
+  return (
+    <Modal label="行动" className="goal-dialog" onClose={onClose}>
+      <div className="modal-heading">
+        <span>{action ? "编辑行动" : "添加行动"}</span>
+        <button className="icon-button" onClick={onClose}>
+          ×
+        </button>
+      </div>
+      <form {...formKeys}
+        className="goal-editor"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (title.trim())
+            onSave({
+              title: title.trim(),
+              notes: notes.trim(),
+              phaseId: stage || null,
+            });
+        }}
+      >
+        <label>
+          行动
+          <input
+            data-autofocus
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+          />
+        </label>
+        <label>
+          所属阶段
+          <select value={stage} onChange={(e) => setStage(e.target.value)}>
+            <option value="">暂不归类</option>
+            {phases.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.title}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          说明（可选）
+          <textarea value={notes} onChange={(e) => setNotes(e.target.value)} />
+        </label>
+        <div className="modal-footer">
+          <button className="linkish" type="button" onClick={onClose}>
+            取消
+          </button>
+          <button className="button-primary" disabled={busy}>
+            保存行动
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
 }
-
-function GoalTaskPicker({ goal, mode, busy, operationError, onClose, onPick }: { goal: GoalResponse; mode: "link" | "next"; busy: boolean; operationError: string | null; onClose: () => void; onPick: (task: GoalTask) => void }) {
-  const [items, setItems] = useState<GoalTask[] | null>(null); const [error, setError] = useState<string | null>(null); const [query, setQuery] = useState("");
-  useEffect(() => { let cancelled = false; void listGoalCandidates().then((result) => { if (!cancelled) setItems(result.items); }).catch((err) => { if (!cancelled) setError(errorMessage(err)); }); return () => { cancelled = true; }; }, []);
-  const candidates = useMemo(() => (items ?? []).filter((task) => {
-    if (task.completed) return false;
-    if (mode === "next") return task.goalId === goal.id && (!task.phaseId || phaseOf(goal, task.phaseId)?.status === "open");
-    return task.goalId === null;
-  }).filter((task) => `${task.title}\n${task.notes}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())), [items, mode, goal.id, goal.phases, query]);
-  return <Modal className="goal-dialog" label={mode === "next" ? "选择下一步" : "关联已有待办"} onClose={onClose}><div className="modal-heading"><span>{mode === "next" ? "选择下一步" : "关联已有待办"}</span><button type="button" className="icon-button" aria-label="关闭" disabled={busy} onClick={onClose}>×</button></div><div className="goal-picker"><input data-autofocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索事项" aria-label="搜索事项" />{(error || operationError) && <p className="error" role="alert">{error || operationError}</p>}{items === null && !error && <p>加载中…</p>}<ul>{candidates.map((task) => <li key={task.taskId}><div><strong>{task.title}</strong><span>{taskLocation(task, goal.serverToday)}</span></div><button type="button" className="button-secondary" disabled={busy} onClick={() => onPick(task)}>{mode === "next" ? "设为下一步" : "关联"}</button></li>)}</ul>{items && candidates.length === 0 && <p className="goal-subtle-empty">没有可选事项。</p>}</div></Modal>;
+function LinkDialog({
+  action,
+  busy,
+  onClose,
+  onPick,
+}: {
+  action: GoalAction;
+  busy: boolean;
+  onClose: () => void;
+  onPick: (task: GoalTask) => void;
+}) {
+  const [items, setItems] = useState<GoalTask[] | null>(null);
+  const [query, setQuery] = useState("");
+  useEffect(() => {
+    void listGoalCandidates().then((x) => setItems(x.items));
+  }, []);
+  const shown = (items ?? []).filter(
+    (x) =>
+      !x.goalId &&
+      `${x.title}\n${x.notes}`.toLowerCase().includes(query.toLowerCase()),
+  );
+  return (
+    <Modal label="关联已有待办" className="goal-dialog" onClose={onClose}>
+      <div className="modal-heading">
+        <span>关联已有待办</span>
+        <button className="icon-button" onClick={onClose}>
+          ×
+        </button>
+      </div>
+      <div className="goal-picker">
+        <p>{action.title}</p>
+        <input
+          data-autofocus
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="搜索待办"
+        />
+        <ul>
+          {shown.map((task) => (
+            <li key={task.taskId}>
+              <strong>{task.title}</strong>
+              <button
+                className="button-secondary"
+                disabled={busy}
+                onClick={() => onPick(task)}
+              >
+                关联
+              </button>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </Modal>
+  );
 }

@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import copy
 from contextlib import contextmanager
-from typing import Iterator, Protocol
+from typing import Any, Iterator, Protocol
 
 from local_planner.domain.errors import Conflict
 from local_planner.domain.models import (
     CalendarDate,
     Goal,
+    GoalAction,
     GoalPhase,
     DayRecord,
     DayTaskEntry,
@@ -27,10 +29,25 @@ class MetaStore(Protocol):
     def set(self, key: str, value: str) -> None: ...
 
 
+class PlanningStore(Protocol):
+    """Durable draft documents; returned values are detached from storage."""
+
+    def get(self, draft_id: str) -> dict[str, Any] | None: ...
+
+    def list(self) -> list[dict[str, Any]]: ...
+
+    def save(self, draft: dict[str, Any]) -> None: ...
+
+    def get_request(self, request_id: str) -> tuple[str, str] | None: ...
+
+    def save_request(self, request_id: str, fingerprint: str, draft_id: str) -> None: ...
+
+
 class UnitOfWork(Protocol):
     """Persistence port. Domain never BEGIN/COMMIT; the adapter owns that."""
 
     meta: MetaStore
+    planning: PlanningStore
 
     def transaction(self) -> Iterator[None]: ...
 
@@ -47,6 +64,22 @@ class UnitOfWork(Protocol):
     def save_phase(self, phase: GoalPhase) -> None: ...
 
     def list_goal_tasks(self, goal_id: str) -> list[Task]: ...
+
+    def get_goal_action(self, action_id: str) -> GoalAction | None: ...
+
+    def list_goal_actions(self, goal_id: str) -> list[GoalAction]: ...
+
+    def save_goal_action(self, action: GoalAction) -> None: ...
+
+    def delete_goal_action(self, action_id: str) -> None: ...
+
+    def get_goal_action_request(self, request_id: str) -> tuple[str, str] | None: ...
+
+    def save_goal_action_request(self, request_id: str, fingerprint: str, action_id: str) -> None: ...
+
+    def delete_phase(self, phase_id: str) -> None: ...
+
+    def delete_goal(self, goal_id: str) -> None: ...
 
     def get_goal_request(self, request_id: str) -> tuple[str, str] | None: ...
 
@@ -120,12 +153,40 @@ class InMemoryMeta:
         self._values[key] = value
 
 
+class InMemoryPlanningStore:
+    """Test double with the same copy-on-read behavior as SQLite JSON rows."""
+
+    def __init__(self) -> None:
+        self._drafts: dict[str, dict[str, Any]] = {}
+        self._requests: dict[str, tuple[str, str]] = {}
+
+    def get(self, draft_id: str) -> dict[str, Any] | None:
+        draft = self._drafts.get(draft_id)
+        return copy.deepcopy(draft) if draft is not None else None
+
+    def list(self) -> list[dict[str, Any]]:
+        return [copy.deepcopy(draft) for draft in sorted(
+            self._drafts.values(), key=lambda value: (value["updatedAt"], value["id"]), reverse=True,
+        )]
+
+    def save(self, draft: dict[str, Any]) -> None:
+        self._drafts[draft["id"]] = copy.deepcopy(draft)
+
+    def get_request(self, request_id: str) -> tuple[str, str] | None:
+        return self._requests.get(request_id)
+
+    def save_request(self, request_id: str, fingerprint: str, draft_id: str) -> None:
+        self._requests[request_id] = (fingerprint, draft_id)
+
+
 class InMemoryUnitOfWork:
     """Process-local store for domain unit tests. Same port as persistence."""
 
     def __init__(self) -> None:
         self._goals: dict[str, Goal] = {}
         self._phases: dict[str, GoalPhase] = {}
+        self._goal_actions: dict[str, GoalAction] = {}
+        self._goal_action_requests: dict[str, tuple[str, str]] = {}
         self._goal_requests: dict[str, tuple[str, str]] = {}
         self._tasks: dict[TaskId, Task] = {}
         self._days: dict[CalendarDate, DayRecord] = {}
@@ -137,6 +198,7 @@ class InMemoryUnitOfWork:
         self._task_seq = 0
         self._task_order: dict[TaskId, int] = {}
         self.meta = InMemoryMeta()
+        self.planning = InMemoryPlanningStore()
 
     @contextmanager
     def transaction(self) -> Iterator[None]:
@@ -162,6 +224,30 @@ class InMemoryUnitOfWork:
 
     def list_goal_tasks(self, goal_id: str) -> list[Task]:
         return sorted((t for t in self._tasks.values() if t.goal_id == goal_id and t.discarded_at is None), key=lambda t: (t.created_at, t.id))
+
+    def get_goal_action(self, action_id: str) -> GoalAction | None:
+        return self._goal_actions.get(action_id)
+
+    def list_goal_actions(self, goal_id: str) -> list[GoalAction]:
+        return sorted((a for a in self._goal_actions.values() if a.goal_id == goal_id), key=lambda a: (a.position, a.id))
+
+    def save_goal_action(self, action: GoalAction) -> None:
+        self._goal_actions[action.id] = action
+
+    def delete_goal_action(self, action_id: str) -> None:
+        self._goal_actions.pop(action_id, None)
+
+    def get_goal_action_request(self, request_id: str) -> tuple[str, str] | None:
+        return self._goal_action_requests.get(request_id)
+
+    def save_goal_action_request(self, request_id: str, fingerprint: str, action_id: str) -> None:
+        self._goal_action_requests[request_id] = (fingerprint, action_id)
+
+    def delete_phase(self, phase_id: str) -> None:
+        self._phases.pop(phase_id, None)
+
+    def delete_goal(self, goal_id: str) -> None:
+        self._goals.pop(goal_id, None)
 
     def get_goal_request(self, request_id: str) -> tuple[str, str] | None:
         return self._goal_requests.get(request_id)

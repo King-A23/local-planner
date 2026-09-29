@@ -109,10 +109,12 @@ def test_delete_undo_restores_link_without_overwriting_new_next(env, new_selecti
     g = new(env); t = action(env, g); t2 = action(env, g, '另外一步'); choose(env, g, t)
     deleted = call(env, delete_with_undo, 'task', t.id)
     assert uow.get_task(t.id) is None
+    assert not any(item.task_id == t.id for item in uow.list_goal_actions(g.id))
     assert uow.get_goal(g.id).next_task_id is None
     if new_selection: choose(env, g, t2)
     call(env, undo_delete, deleted)
     assert uow.get_task(t.id).goal_id == g.id
+    assert any(item.task_id == t.id for item in uow.list_goal_actions(g.id))
     assert uow.get_goal(g.id).next_task_id == (t2.id if new_selection else t.id)
 
 

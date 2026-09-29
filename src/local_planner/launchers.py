@@ -96,6 +96,8 @@ PRESET_INSTRUCTIONS = """你在通过 Local Planner 的 CLI（python -m local_pl
 - 创建目标、添加关联任务、添加阶段必须各有稳定 --request-id；重试同一操作时复用同一 ID，绝不按标题猜测是否已经创建。
 - 目标只有一个明确下一步。设置下一步前确认任务已关联、未完成且未删除；schedule-next 需传最近读取的 expected task ID 与 expected scheduled date（待办传 none），只排到今天并保留已有时钟。
 - 暂停和结束目标不会完成、删除、取消安排或移动任何任务。已暂停目标可以整理路线，但不能 schedule-next；结束目标只允许编辑和恢复。阶段完成或跳过也不会自动完成任务。
+- 每个目标至多设置一个主要支持目标（goal set-parent）；该关系不代表日期、任务归属或自动完成。设置前读取目标，不能猜 ID 或形成循环。
+- 路线中的候选行动用 goal action add 创建，保存候选行动不会创建待办。仅用户明确说“加入今天”时，才用 goal action materialize --destination today；说“加入待办”时才用 inventory。转为任务后沿用同一行动和任务 ID，不要重复创建。
 - 不要生成整条路线、百分比、依赖、日期承诺或自动 AI 排程。用户没有明确要求时，只进行一个清楚的目标或下一步操作。
 
 定期事项（优先于页面默认写入规则）：
@@ -189,6 +191,84 @@ class RunResult:
     returncode: int | None
     stdout: str
     stderr: str
+
+
+def compose_planning_prompt(
+    user_text: str,
+    *,
+    context_file: Path,
+    result_file: Path,
+    scope_goal_id: str | None = None,
+    selected_phase_id: str | None = None,
+) -> str:
+    """Prompt for the draft-only planner runner.
+
+    This intentionally does not share ``PRESET_INSTRUCTIONS``.  The normal
+    runner gives an agent a live CLI and is allowed to change the plan; a
+    planning run can only return a document for the host to validate.
+    """
+    scope = (
+        "当前请求只调整 context.scopeGoalId 对应的目标。"
+        if scope_goal_id else "当前请求可以整理整个目标地图。"
+    )
+    phase = (
+        f"用户当前选中的阶段是 {selected_phase_id}；“这一阶段”等指代只作用于它。"
+        if selected_phase_id else "没有选中阶段。"
+    )
+    return f"""你是 Local Planner 的规划助手。你只能生成规划草案，不能修改用户的真实数据。
+
+先读取只读上下文 JSON：{context_file}
+{scope}
+{phase}
+
+请根据用户的话保留已有完成记录和已确认内容，局部调整时不要重建无关目标。近期行动可以具体，远期只写阶段成果；日期未知时留空，不能编造日期。一个目标最多有一个 parentGoalId，只在用户明确表达支持关系时设置，不能制造循环。不要自动把行动安排到今天、创建普通待办或改变已有任务。
+已有目标、阶段和行动必须保留上下文中的稳定 ID。新建目标、阶段或行动时生成新的 UUID；不要猜测或伪造已有 Task ID。新目标的 state 必须为 "active"；taskId、scheduledDate、completed、discarded 只属于 action，不能写到 goal 或 phase。
+
+完成后必须把唯一的严格 JSON 对象写入：{result_file}
+允许的顶层形式只能是：
+{{"document": {{"goals": [...] }}, "message": "可选的简短说明"}}
+或者在确实缺少决定性信息时：
+{{"question": "一个简短的澄清问题"}}
+
+document 仅包含 goals。每个目标可包含 id、title、notes、horizonText、parentGoalId、state、endReason、nextTaskId、nextActionId、focusPhaseId、revision、phases、actions。phase 可包含 id、goalId、title、notes、position、status、outcome、horizonText；phase.status **只能**是 "open"、"done" 或 "skipped"，不能使用 active、upcoming 等词。当前阶段用 goal.focusPhaseId 指向一个 status 为 open 的 phase，不用 phase.status 表达。数组顺序就是路线顺序，position 从 0 依次递增。action 可包含 id、goalId、phaseId、title、notes、position、taskId、scheduledDate、completed、discarded；新 action 的 taskId 为 null、scheduledDate 为 null、completed 为 false、discarded 为 false。不要添加任务创建、删除、排期或其他命令字段。
+
+新条目的最小形状示例（UUID 用实际新 UUID 替换）：
+{{"id":"UUID","title":"目标","notes":"","horizonText":"","parentGoalId":null,"state":"active","endReason":null,"nextTaskId":null,"nextActionId":null,"focusPhaseId":null,"revision":0,"phases":[{{"id":"UUID","goalId":"目标 UUID","title":"阶段","notes":"","position":0,"status":"open","outcome":"","horizonText":""}}],"actions":[{{"id":"UUID","goalId":"目标 UUID","phaseId":"阶段 UUID","title":"第一步","notes":"","position":0,"taskId":null,"scheduledDate":null,"completed":false,"discarded":false}}]}}
+JSON 之外的解释可输出到终端，但结果文件必须可被 JSON 严格解析。
+
+用户原话：
+{user_text.strip()}
+"""
+
+
+def parse_plan_result(path: Path) -> dict[str, Any]:
+    """Read the deliberately small planning-result protocol.
+
+    Full document validation belongs to the domain layer because it has the
+    current draft and persistence invariants.  Keep this parser strict enough
+    that a launcher cannot accidentally turn prose into an applied draft.
+    """
+    if not path.is_file():
+        raise ValueError("助手没有生成规划结果文件")
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("规划结果不是有效 JSON") from exc
+    if not isinstance(raw, dict):
+        raise ValueError("规划结果必须是 JSON 对象")
+    keys = set(raw)
+    if keys == {"question"}:
+        if not isinstance(raw["question"], str) or not raw["question"].strip():
+            raise ValueError("规划问题不能为空")
+        return {"question": raw["question"].strip()}
+    if not keys.issubset({"document", "message"}) or "document" not in raw:
+        raise ValueError("规划结果只能包含 document、message 或 question")
+    document = raw["document"]
+    if not isinstance(document, dict) or set(document) != {"goals"} or not isinstance(document["goals"], list):
+        raise ValueError("规划 document 必须只包含 goals 数组")
+    if "message" in raw and (not isinstance(raw["message"], str) or len(raw["message"]) > 2000):
+        raise ValueError("规划说明无效")
+    return {"document": document, **({"message": raw["message"].strip()} if raw.get("message") else {})}
 
 
 def launchers_path(root: Path | None = None) -> Path:
@@ -385,6 +465,98 @@ def run_launcher(
                 stdout="",
                 stderr=str(exc),
             )
+
+
+def run_planning_launcher(
+    launcher: Launcher,
+    prompt: str,
+    *,
+    planning_context: dict[str, Any],
+    timeout: float = 600,
+    data_root: Path | None = None,
+    scope_goal_id: str | None = None,
+    selected_phase_id: str | None = None,
+    control: RunControl | None = None,
+) -> tuple[RunResult, dict[str, Any] | None]:
+    """Run an agent against a disposable planning workspace.
+
+    The model receives a JSON snapshot and an empty Local Planner data root.
+    Even a launcher that invokes the app CLI therefore cannot write the live
+    database.  Only the host reads ``plan-result.json`` after a successful
+    process and hands it to the domain validator.
+    """
+    del data_root  # Make accidental use of the production root impossible here.
+    with tempfile.TemporaryDirectory(prefix="local-planner-planning-") as tmp:
+        workspace = Path(tmp)
+        isolated_root = workspace / "data"
+        isolated_root.mkdir()
+        # The launcher may be Codex with --add-dir {data_dir}; keep every file
+        # it must read or write within that explicitly allowed directory.
+        context_file = isolated_root / "planning-context.json"
+        result_file = isolated_root / "plan-result.json"
+        context_file.write_text(
+            json.dumps(planning_context, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        composed = compose_planning_prompt(
+            prompt,
+            context_file=context_file,
+            result_file=result_file,
+            scope_goal_id=scope_goal_id,
+            selected_phase_id=selected_phase_id,
+        )
+        try:
+            argv = expand_command(launcher.command, composed, context_file, isolated_root)
+        except ValueError as exc:
+            return RunResult(False, [], None, "", str(exc)), None
+        # Some existing local Codex launchers pin --cd to a previous QA
+        # workspace.  Preserve arbitrary custom launchers, but make this known
+        # Codex option point at the isolated directory so plan-result.json is
+        # both reachable and within Codex's allowed work area.
+        if any(Path(part).name == "codex" for part in argv):
+            for index, part in enumerate(argv[:-1]):
+                if part in {"--cd", "-C"}:
+                    argv[index + 1] = str(isolated_root)
+        env = os.environ.copy()
+        env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env.get("PATH", "")
+        env["LOCAL_PLANNER_PROMPT"] = composed
+        env["LOCAL_PLANNER_CONTEXT_FILE"] = str(context_file)
+        env["LOCAL_PLANNER_PLAN_RESULT_FILE"] = str(result_file)
+        env["LOCAL_PLANNER_DATA_DIR"] = str(isolated_root)
+        env["LOCAL_PLANNER_PLANNING_MODE"] = "1"
+        try:
+            with agent_process(
+                argv,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=env,
+                cwd=isolated_root,
+            ) as process:
+                if control:
+                    control.attach(process)
+                try:
+                    result = _collect_result(process, argv, launcher, timeout, control)
+                finally:
+                    if control:
+                        control.detach()
+        except OSError as exc:
+            return RunResult(False, argv, None, "", str(exc)), None
+        if not result.ok or (control and control.cancelled):
+            return result, None
+        try:
+            return result, parse_plan_result(result_file)
+        except ValueError as exc:
+            return RunResult(
+                ok=False,
+                argv=result.argv,
+                returncode=result.returncode,
+                stdout=result.stdout,
+                stderr=(result.stderr + "\n" if result.stderr else "") + str(exc),
+            ), None
 
 
 def _collect_result(process, argv: list[str], launcher: Launcher, timeout: float, control: RunControl | None = None) -> RunResult:

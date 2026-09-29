@@ -122,3 +122,45 @@ def test_goal_agent_surface_never_falls_back_to_today(client) -> None:
     # Launcher validation precedes work, but goal page input is still rejected
     # as a request validation error before an Agent run can be created.
     assert missing.status_code == 400
+
+
+def test_roadmap_action_contract_keeps_candidate_out_of_todos_until_materialized(client) -> None:
+    parent = _create(client, "parent")
+    goal = _create(client, "child")
+    goal = _action(client, goal, "set-parent", parentGoalId=parent["id"])
+    assert goal["parentGoalId"] == parent["id"]
+
+    goal = _action(
+        client, goal, "add-phase", title="准备", notes="", outcome="完成两套模拟题",
+        horizonText="本月", requestId="phase-roadmap",
+    )
+    phase = goal["phases"][0]
+    assert phase["outcome"] == "完成两套模拟题"
+    action_goal = _action(
+        client, goal, "add-action", title="做第一套模拟题", notes="记录错题",
+        phaseId=phase["id"], requestId="candidate-1",
+    )
+    candidate = action_goal["actions"][0]
+    assert candidate["taskId"] is None
+    assert action_goal["tasks"] == []
+
+    action_goal = _action(client, action_goal, "next-action", actionId=candidate["id"])
+    materialized = _action(
+        client, action_goal, "materialize-action", actionId=candidate["id"],
+        destination="today", requestId="materialize-1",
+    )
+    linked = materialized["actions"][0]
+    assert linked["taskId"] is not None
+    assert linked["scheduledDate"] == materialized["serverToday"]
+    assert materialized["nextTaskId"] == linked["taskId"]
+    assert materialized["nextActionId"] is None
+
+
+def test_removing_selected_candidate_keeps_request_tombstone_without_fk_failure(client) -> None:
+    goal = _create(client, "remove-action-goal")
+    goal = _action(client, goal, "add-action", title="可撤销行动", notes="", phaseId=None, requestId="remove-candidate")
+    action_id = goal["actions"][0]["id"]
+    goal = _action(client, goal, "next-action", actionId=action_id)
+    removed = _action(client, goal, "remove-action", actionId=action_id)
+    assert removed["actions"] == []
+    assert removed["nextActionId"] is None

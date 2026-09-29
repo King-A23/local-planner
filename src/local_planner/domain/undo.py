@@ -6,7 +6,7 @@ from typing import Literal
 from local_planner.clock import Clock
 from local_planner.domain import commands
 from local_planner.domain.errors import Conflict, NotFound
-from local_planner.domain.models import DayTaskEntry, Errand, RecurrenceSeries, Task
+from local_planner.domain.models import DayTaskEntry, Errand, GoalAction, RecurrenceSeries, Task
 from local_planner.domain.store import UnitOfWork
 
 
@@ -18,6 +18,7 @@ class DeletedItem:
     entries: tuple[DayTaskEntry, ...] = ()
     goal_next_task_id: str | None = None
     goal_revision_after: int | None = None
+    goal_action: GoalAction | None = None
 
 
 def delete_with_undo(clock: Clock, uow: UnitOfWork, kind: str, entity_id: str) -> DeletedItem:
@@ -27,12 +28,18 @@ def delete_with_undo(clock: Clock, uow: UnitOfWork, kind: str, entity_id: str) -
             raise NotFound("找不到该事项")
         entries = tuple(uow.list_entries_for_task(entity_id))
         goal = uow.get_goal(before.goal_id) if before.goal_id else None
+        action = next(
+            (item for item in uow.list_goal_actions(before.goal_id)
+             if item.task_id == before.id),
+            None,
+        ) if before.goal_id else None
         commands.delete_task(clock, uow, entity_id)
         removed = tuple(e for e in entries if uow.get_entry(e.day_date, entity_id) is None)
         goal_after = uow.get_goal(before.goal_id) if before.goal_id else None
         return DeletedItem("task", before, uow.get_task(entity_id), removed,
                            goal.next_task_id if goal else None,
-                           goal_after.revision if goal_after else None)
+                           goal_after.revision if goal_after else None,
+                           action)
     if kind == "errand":
         before = uow.get_errand(entity_id)
         if before is None:
@@ -57,6 +64,11 @@ def undo_delete(clock: Clock, uow: UnitOfWork, change: DeletedItem) -> None:
             if uow.get_entry(entry.day_date, before.id) is not None:
                 raise Conflict("事项已经恢复，请刷新页面")
         uow.save_task(before)
+        if change.goal_action:
+            existing_action = uow.get_goal_action(change.goal_action.id)
+            if existing_action is not None and existing_action != change.goal_action:
+                raise Conflict("路线行动已经发生变化，无法撤销这次删除")
+            uow.save_goal_action(change.goal_action)
         for entry in change.entries:
             entries = uow.list_entries(entry.day_date)
             if any(e.sort_order == entry.sort_order for e in entries):

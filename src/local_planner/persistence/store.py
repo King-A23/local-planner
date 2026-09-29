@@ -10,6 +10,7 @@ from typing import Iterator
 from local_planner.domain.models import (
     CalendarDate,
     Goal,
+    GoalAction,
     GoalPhase,
     DayRecord,
     DayTaskEntry,
@@ -51,6 +52,10 @@ class SqliteUnitOfWork:
     def __init__(self, conn: sqlite3.Connection) -> None:
         self.conn = conn
         self.meta = SqliteMeta(conn)
+        # Planning drafts have a dedicated persistence helper; importing lazily
+        # keeps the core store usable by the migration/recovery bootstrap.
+        from local_planner.persistence.planning_store import PlanningStore
+        self.planning = PlanningStore(conn)
 
     @classmethod
     def open(cls, path: str | Path) -> SqliteUnitOfWork:
@@ -80,14 +85,15 @@ class SqliteUnitOfWork:
     def save_goal(self, goal: Goal) -> None:
         self.conn.execute("""
             INSERT INTO goals (id, title, notes, horizon_text, state, end_reason,
-              next_task_id, focus_phase_id, revision, created_at, updated_at, ended_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              next_task_id, parent_goal_id, next_action_id, focus_phase_id, revision, created_at, updated_at, ended_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET title=excluded.title, notes=excluded.notes,
               horizon_text=excluded.horizon_text, state=excluded.state, end_reason=excluded.end_reason,
-              next_task_id=excluded.next_task_id, focus_phase_id=excluded.focus_phase_id,
+              next_task_id=excluded.next_task_id, parent_goal_id=excluded.parent_goal_id,
+              next_action_id=excluded.next_action_id, focus_phase_id=excluded.focus_phase_id,
               revision=excluded.revision, updated_at=excluded.updated_at, ended_at=excluded.ended_at
         """, (goal.id, goal.title, goal.notes, goal.horizon_text, goal.state, goal.end_reason,
-              goal.next_task_id, goal.focus_phase_id, goal.revision, goal.created_at, goal.updated_at, goal.ended_at))
+              goal.next_task_id, goal.parent_goal_id, goal.next_action_id, goal.focus_phase_id, goal.revision, goal.created_at, goal.updated_at, goal.ended_at))
 
     def get_phase(self, phase_id: str) -> GoalPhase | None:
         row = self.conn.execute("SELECT * FROM goal_phases WHERE id = ?", (phase_id,)).fetchone()
@@ -98,10 +104,10 @@ class SqliteUnitOfWork:
 
     def save_phase(self, phase: GoalPhase) -> None:
         self.conn.execute("""
-            INSERT INTO goal_phases (id, goal_id, title, notes, position, status) VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO goal_phases (id, goal_id, title, notes, position, status, outcome, horizon_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET title=excluded.title, notes=excluded.notes,
-                position=excluded.position, status=excluded.status
-        """, (phase.id, phase.goal_id, phase.title, phase.notes, phase.position, phase.status))
+                position=excluded.position, status=excluded.status, outcome=excluded.outcome, horizon_text=excluded.horizon_text
+        """, (phase.id, phase.goal_id, phase.title, phase.notes, phase.position, phase.status, phase.outcome, phase.horizon_text))
 
     def list_goal_tasks(self, goal_id: str) -> list[Task]:
         rows = self.conn.execute("""
@@ -110,6 +116,38 @@ class SqliteUnitOfWork:
             WHERE t.goal_id = ? AND t.discarded_at IS NULL ORDER BY t.created_at, t.id
         """, (goal_id,))
         return [_task_from_row(row) for row in rows]
+
+    def get_goal_action(self, action_id: str) -> GoalAction | None:
+        row = self.conn.execute("SELECT * FROM goal_actions WHERE id = ?", (action_id,)).fetchone()
+        return GoalAction(**dict(row)) if row else None
+
+    def list_goal_actions(self, goal_id: str) -> list[GoalAction]:
+        return [GoalAction(**dict(row)) for row in self.conn.execute(
+            "SELECT * FROM goal_actions WHERE goal_id = ? ORDER BY position, id", (goal_id,))]
+
+    def save_goal_action(self, action: GoalAction) -> None:
+        self.conn.execute("""
+            INSERT INTO goal_actions(id, goal_id, phase_id, title, notes, position, task_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET goal_id=excluded.goal_id, phase_id=excluded.phase_id,
+              title=excluded.title, notes=excluded.notes, position=excluded.position, task_id=excluded.task_id
+        """, (action.id, action.goal_id, action.phase_id, action.title, action.notes, action.position, action.task_id))
+
+    def delete_goal_action(self, action_id: str) -> None:
+        self.conn.execute("DELETE FROM goal_actions WHERE id = ?", (action_id,))
+
+    def get_goal_action_request(self, request_id: str) -> tuple[str, str] | None:
+        row = self.conn.execute("SELECT fingerprint, action_id FROM goal_action_requests WHERE request_id = ?", (request_id,)).fetchone()
+        return (row["fingerprint"], row["action_id"]) if row else None
+
+    def save_goal_action_request(self, request_id: str, fingerprint: str, action_id: str) -> None:
+        self.conn.execute("INSERT INTO goal_action_requests(request_id, fingerprint, action_id) VALUES (?, ?, ?)", (request_id, fingerprint, action_id))
+
+    def delete_phase(self, phase_id: str) -> None:
+        self.conn.execute("DELETE FROM goal_phases WHERE id = ?", (phase_id,))
+
+    def delete_goal(self, goal_id: str) -> None:
+        self.conn.execute("DELETE FROM goals WHERE id = ?", (goal_id,))
 
     def get_goal_request(self, request_id: str) -> tuple[str, str] | None:
         row = self.conn.execute("SELECT fingerprint, goal_id FROM goal_requests WHERE request_id = ?", (request_id,)).fetchone()

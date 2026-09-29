@@ -125,7 +125,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         add(view, "今天", #selector(goToday), "1", target: self)
         add(view, "待办", #selector(goInventory), "2", target: self)
         add(view, "定期事项", #selector(goRecurrences), "3", target: self)
-        add(view, "目标", #selector(goGoals), "4", target: self)
+        add(view, "规划", #selector(goGoals), "4", target: self)
         view.addItem(.separator())
         add(view, "重新载入", #selector(reload), "r", target: self)
         add(view, "放大", #selector(zoomIn), "=", target: self)
@@ -213,7 +213,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         webView = makeWebView(frame: window.contentView!.bounds, kind: "main")
         webView.allowsBackForwardNavigationGestures = true
         window.contentView = webView
-        webView.load(URLRequest(url: url))
+        webView.load(URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData))
         window.makeFirstResponder(webView)
     }
 
@@ -247,7 +247,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             settingsWindow = settings
             settingsWebView = view
             pendingSettingsFragment = fragment
-            view.load(URLRequest(url: baseURL.appendingPathComponent("settings")))
+            view.load(URLRequest(url: baseURL.appendingPathComponent("settings"), cachePolicy: .reloadIgnoringLocalCacheData))
         } else {
             settingsWebView?.evaluateJavaScript("window.dispatchEvent(new Event('planner:settings-opened'))")
             if let fragment {
@@ -319,7 +319,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
 
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                  for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
-        if let url = navigationAction.request.url, isLocal(url) { webView.load(URLRequest(url: url)) }
+        if let url = navigationAction.request.url, isLocal(url) { webView.load(URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData)) }
         return nil
     }
 
@@ -590,7 +590,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         components.fragment = fragment
         guard let url = components.url else { return }
         window?.makeKeyAndOrderFront(nil)
-        webView?.load(URLRequest(url: url))
+        webView?.load(URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData))
     }
     @objc private func quickAdd() {
         window?.makeKeyAndOrderFront(nil)
@@ -614,7 +614,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     @objc private func goHelp() { showSettings(fragment: "help") }
     @objc private func goAbout() { showSettings(fragment: "about") }
     private var activeWebView: WKWebView? { NSApp.keyWindow === settingsWindow ? settingsWebView : webView }
-    @objc private func reload() { activeWebView?.reload() }
+    @objc private func reload() { activeWebView?.reloadFromOrigin() }
     @objc private func zoomIn() { if let view = activeWebView { view.pageZoom = min(2, view.pageZoom + 0.1) } }
     @objc private func zoomOut() { if let view = activeWebView { view.pageZoom = max(0.6, view.pageZoom - 0.1) } }
     @objc private func resetZoom() { activeWebView?.pageZoom = 1 }

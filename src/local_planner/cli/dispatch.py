@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 import logging
 import sys
 import time
@@ -18,10 +20,10 @@ from local_planner.cli.parser import build_domain_parser
 from local_planner.domain import commands as cmds
 from local_planner.domain.commands import UNSET
 from local_planner.domain.recurrence import UNSET as RECURRENCE_UNSET
-from local_planner.domain.errors import DaySealed, DomainError, NotFound
+from local_planner.domain.errors import Conflict, DaySealed, DomainError, NotFound
 from local_planner.domain.models import add_calendar_days, parse_calendar_date
 from local_planner.domain.search import search_items
-from local_planner.domain import goals
+from local_planner.domain import goals, planning
 from local_planner.agent_contract import capabilities_payload
 from local_planner.paths import data_dir, db_path, resolve_clock
 from local_planner.present import (
@@ -108,6 +110,27 @@ def _run(args: Any, today: str, clock: Any, uow: Any) -> dict[str, Any]:
         return search_items(clock, uow, args.query)
     if command == "context":
         return context_payload(clock, uow, today)
+    if command == "planning.list":
+        return {"items": planning.list_drafts(uow, args.goal_id), "recoveryGeneration": uow.meta.get("recovery_generation")}
+    if command == "planning.show":
+        return planning.get_draft(uow, args.draft_id)
+    if command == "planning.create":
+        return planning.create_draft(clock, uow, goal_id=args.goal_id, phase_id=args.phase_id,
+                                     request_id=args.request_id, recovery_generation=_generation(args.recovery_generation))
+    if command.startswith("planning."):
+        document = None
+        if command == "planning.update":
+            try:
+                with Path(args.document_file).open(encoding="utf-8") as source:
+                    text = source.read(1_000_001)
+                if len(text) > 1_000_000:
+                    raise ValueError("文档超过 1 MB 字符限制")
+                document = json.loads(text)
+            except (OSError, UnicodeError, ValueError) as exc:
+                raise UsageError(f"无法读取规划 JSON：{exc}", command=command) from exc
+        return planning.change_draft(clock, uow, args.draft_id, command.split(".")[1],
+                                     expected_revision=args.expected_revision, recovery_generation=_generation(args.recovery_generation),
+                                     request_id=args.request_id, document=document)
     if command == "goal.list":
         return {
             "items": goals.list_goal_payloads(uow),
@@ -146,6 +169,8 @@ def _run(args: Any, today: str, clock: Any, uow: Any) -> dict[str, Any]:
             operation, values = "state", {
                 "state": args.state, "end_reason": args.end_reason,
             }
+        elif command == "goal.set-parent":
+            operation, values = "set-parent", {"parent_goal_id": _generation(args.parent_goal_id)}
         elif command == "goal.add-task":
             operation, values = "add-task", {
                 "title": args.title, "notes": args.notes,
@@ -167,12 +192,14 @@ def _run(args: Any, today: str, clock: Any, uow: Any) -> dict[str, Any]:
             }
         elif command == "goal.phase.add":
             operation, values = "add-phase", {
-                "title": args.title, "notes": args.notes, "request_id": args.request_id,
+                "title": args.title, "notes": args.notes, "outcome": args.outcome,
+                "horizon_text": args.horizon_text, "request_id": args.request_id,
             }
         elif command == "goal.phase.edit":
             operation, values = "edit-phase", {
                 "phase_id": args.phase_id, "title": args.title,
-                "notes": args.notes, "status": args.status,
+                "notes": args.notes, "status": args.status, "outcome": args.outcome,
+                "horizon_text": args.horizon_text,
             }
         elif command == "goal.phase.focus":
             operation, values = "focus-phase", {
@@ -180,6 +207,22 @@ def _run(args: Any, today: str, clock: Any, uow: Any) -> dict[str, Any]:
             }
         elif command == "goal.phase.reorder":
             operation, values = "reorder-phases", {"phase_ids": args.phase_ids}
+        elif command == "goal.action.add":
+            operation, values = "add-action", {"title": args.title, "notes": args.notes,
+                "phase_id": args.phase_id, "request_id": args.request_id}
+        elif command == "goal.action.edit":
+            operation, values = "edit-action", {"action_id": args.action_id, "title": args.title,
+                "notes": args.notes, "phase_id": _generation(args.phase_id)}
+        elif command == "goal.action.remove":
+            operation, values = "remove-action", {"action_id": args.action_id}
+        elif command == "goal.action.next":
+            operation, values = "next-action", {"action_id": _generation(args.action_id)}
+        elif command == "goal.action.materialize":
+            operation, values = "materialize-action", {"action_id": args.action_id, "destination": args.destination,
+                "request_id": args.request_id}
+        elif command == "goal.action.link":
+            operation, values = "link-action", {"action_id": args.action_id, "task_id": args.task_id,
+                "expected_task_id": _generation(args.expected_task_id)}
         else:
             raise UsageError("未知目标命令", command=command)
         return _goal_result(

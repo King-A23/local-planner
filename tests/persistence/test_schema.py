@@ -54,7 +54,11 @@ def test_schema_v1_tables_indexes_triggers_and_meta(uow: SqliteUnitOfWork) -> No
         "day_planning",
         "goals",
         "goal_phases",
-        "goal_requests",
+            "goal_requests",
+            "goal_actions",
+            "goal_action_requests",
+            "planning_drafts",
+            "planning_requests",
     } <= tables
     triggers = {
         row[0]
@@ -91,10 +95,12 @@ def test_schema_v1_tables_indexes_triggers_and_meta(uow: SqliteUnitOfWork) -> No
         "idx_recurrence_occurrence_entity",
         "idx_goal_phases_goal",
         "idx_tasks_goal",
+        "idx_goals_parent",
+        "idx_goal_actions_goal",
     }
     assert uow.conn.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[
         0
-    ] == 8
+    ] == 10
     columns = {
         row[1]
         for row in uow.conn.execute("PRAGMA table_info(recurrence_series)")
@@ -272,7 +278,7 @@ def test_second_open_does_not_rerun_init(db_path: Path) -> None:
     try:
         assert second.conn.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[
             0
-        ] == 8
+        ] == 10
     finally:
         second.close()
 

@@ -211,6 +211,8 @@ class Goal:
     state: Literal["active", "paused", "ended"]
     end_reason: Literal["achieved", "abandoned"] | None
     next_task_id: str | None
+    parent_goal_id: str | None
+    next_action_id: str | None
     focus_phase_id: str | None
     revision: int
     created_at: str
@@ -226,3 +228,18 @@ class GoalPhase:
     notes: str
     position: int
     status: Literal["open", "done", "skipped"] = "open"
+    outcome: str = ""
+    horizon_text: str = ""
+
+
+@dataclass(frozen=True)
+class GoalAction:
+    """A candidate action in a roadmap. It becomes a Task only when materialized."""
+
+    id: str
+    goal_id: str
+    phase_id: str | None
+    title: str
+    notes: str
+    position: int
+    task_id: str | None = None
