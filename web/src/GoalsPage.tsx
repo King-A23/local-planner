@@ -53,6 +53,16 @@ function usePlannerFormKeyboard(): HTMLAttributes<HTMLFormElement> {
   };
 }
 
+function usePlanningEntry(describe: () => Promise<void>) {
+  const handler = useRef(describe);
+  handler.current = describe;
+  useEffect(() => {
+    const open = () => { void handler.current(); };
+    window.addEventListener("planner:planning-request", open);
+    return () => window.removeEventListener("planner:planning-request", open);
+  }, []);
+}
+
 function useStageReveal(selection: string | null | undefined) {
   const track = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -317,7 +327,8 @@ export function GoalsPage({
     if (!data) return;
     setBusy(true);
     try {
-      const next = draft?.status === "editing" ? await getPlanningDraft(draft.id) : await createPlanningDraft({
+      const existing = draft?.status === "editing" ? draft : (await listPlanningDrafts()).items.find((item) => item.status === "editing");
+      const next = existing ? await getPlanningDraft(existing.id) : await createPlanningDraft({
         requestId: uid(),
         recoveryGeneration: data.recoveryGeneration,
       });
@@ -338,6 +349,7 @@ export function GoalsPage({
       setBusy(false);
     }
   };
+  usePlanningEntry(describe);
   const save = async (input: GoalInput) => {
     if (!data) return;
     setBusy(true);
@@ -651,7 +663,8 @@ export function GoalDetailPage({
     if (!goal) return;
     setBusy(true);
     try {
-      const d = draft?.status === "editing" ? await getPlanningDraft(draft.id) : await createPlanningDraft({
+      const existing = draft?.status === "editing" ? draft : (await listPlanningDrafts(goal.id)).items.find((item) => item.status === "editing");
+      const d = existing ? await getPlanningDraft(existing.id) : await createPlanningDraft({
         goalId: goal.id,
         selectedPhaseId: selectedId,
         requestId: uid(),
@@ -674,6 +687,7 @@ export function GoalDetailPage({
       setBusy(false);
     }
   };
+  usePlanningEntry(describe);
   if (!goal && !error)
     return (
       <main className="page">

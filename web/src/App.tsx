@@ -151,7 +151,7 @@ export function App() {
     };
     window.addEventListener("planner:planning-draft-updated", updatePlanningRevision);
     window.addEventListener("planner:planning-phase-selected", selectPlanningPhase);
-    const clearPlanning = () => setPlanningContext(null);
+    const clearPlanning = () => { setPlanningContext(null); setAgentOpen(false); };
     window.addEventListener("planner:planning-context-clear", clearPlanning);
     return () => {
       window.removeEventListener("planner:planning-context", beginPlanning);
@@ -164,8 +164,16 @@ export function App() {
   useEffect(() => {
     if (route.kind !== "goals" && route.kind !== "goal") setPlanningContext(null);
     if (route.kind === "goals" && planningContext?.goalId) setPlanningContext(null);
-    if (route.kind === "goal" && planningContext?.goalId && planningContext.goalId !== route.id) setPlanningContext(null);
+    if (route.kind === "goal" && planningContext && planningContext.goalId !== route.id) setPlanningContext(null);
   }, [route.kind, route.kind === "goal" ? route.id : "", planningContext?.goalId]);
+
+  // Every assistant entry on a planning page shares the same draft workflow,
+  // including the header button, a persisted open panel and desktop shortcuts.
+  useEffect(() => {
+    if (agentOpen && goalContextReady && !planningContext && !agentStatus &&
+        (route.kind === "goals" || route.kind === "goal"))
+      window.dispatchEvent(new Event("planner:planning-request"));
+  }, [agentOpen, goalContextReady, planningContext, agentStatus, route.kind, agentGoalId]);
 
   useEffect(() => {
     const open = () => { if (!document.querySelector("dialog[open]")) setSearchOpen(true); };
@@ -321,8 +329,8 @@ export function App() {
         date={agentDate}
         goalId={agentGoalId}
         recoveryGeneration={goalRecoveryGeneration}
-        contextReady={agentSurface !== "goals" && agentSurface !== "goal" || goalContextReady}
-        mode={planningContext ? "planning" : "execution"}
+        contextReady={agentSurface !== "goals" && agentSurface !== "goal" || (goalContextReady && !!planningContext && planningContext.goalId === agentGoalId)}
+        mode={agentSurface === "goals" || agentSurface === "goal" ? "planning" : "execution"}
         draftId={planningContext?.draftId ?? null}
         selectedPhaseId={planningContext?.selectedPhaseId ?? null}
         expectedDraftRevision={planningContext?.expectedDraftRevision ?? null}
