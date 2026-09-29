@@ -27,6 +27,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     private var baseURL: URL?
     private var quitting = false
     private var failed = false
+    private let themePreferenceKey = "plannerTheme"
+    private let themeIds: Set<String> = ["warm-paper", "midnight", "nordic", "forest", "retro"]
 
     private var dataDirectory: URL {
         if let path = ProcessInfo.processInfo.environment["LOCAL_PLANNER_DATA_DIR"] {
@@ -221,8 +223,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .default()
         configuration.userContentController.add(self, name: "plannerDesktop")
+        let savedTheme = UserDefaults.standard.string(forKey: themePreferenceKey)
+        let themeValue = savedTheme.flatMap { themeIds.contains($0) ? "'\($0)'" : nil } ?? "null"
         configuration.userContentController.addUserScript(WKUserScript(
-            source: "window.__PLANNER_DESKTOP_WINDOW__ = '\(kind)';",
+            source: "window.__PLANNER_DESKTOP_WINDOW__ = '\(kind)'; window.__PLANNER_DESKTOP_THEME__ = \(themeValue);",
             injectionTime: .atDocumentStart, forMainFrameOnly: true))
         let view = WKWebView(frame: frame, configuration: configuration)
         view.navigationDelegate = self
@@ -286,11 +290,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             sendShortcutState(to: source)
         case "setQuickShortcut":
             if let value = body["value"] as? String { configureShortcut(value); sendShortcutState(to: source) }
+        case "setTheme":
+            if let value = body["value"] as? String, themeIds.contains(value) {
+                UserDefaults.standard.set(value, forKey: themePreferenceKey)
+            }
         case "settingsChanged":
             guard let event = body["event"] as? String,
                   ["planner:restored", "planner:launchers-changed", "planner:theme-changed", "planner:shortcuts-changed"].contains(event),
                   let data = try? JSONSerialization.data(withJSONObject: body),
                   let json = String(data: data, encoding: .utf8) else { return }
+            if event == "planner:theme-changed" {
+                guard let value = body["detail"] as? String, themeIds.contains(value) else { return }
+                UserDefaults.standard.set(value, forKey: themePreferenceKey)
+            }
             let other = source === settingsWebView ? webView : settingsWebView
             other?.evaluateJavaScript("{ const message = \(json); window.dispatchEvent(new CustomEvent(message.event, {detail: message.detail})); }")
         default: break

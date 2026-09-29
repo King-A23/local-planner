@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { notifySettingsChange } from "./desktop";
+import { notifySettingsChange, preferredTheme } from "./desktop";
 
 export type ThemeId = "warm-paper" | "midnight" | "nordic" | "forest" | "retro";
 
@@ -49,14 +49,7 @@ export function ThemeSwitcher() {
   const [open, setOpen] = useState(false);
   const [theme, setTheme] = useState<ThemeId>(() => {
     if (typeof window === "undefined") return "warm-paper";
-    const urlParams = new URLSearchParams(window.location.search);
-    const fromUrl = urlParams.get("theme") as ThemeId | null;
-    if (fromUrl && THEMES.some((t) => t.id === fromUrl)) {
-      document.documentElement.setAttribute("data-theme", fromUrl);
-      return fromUrl;
-    }
-    let saved: ThemeId | null = null;
-    try { saved = localStorage.getItem(STORAGE_KEY) as ThemeId | null; } catch { /* optional preference */ }
+    const saved = preferredTheme() as ThemeId | null;
     if (saved && THEMES.some((t) => t.id === saved)) {
       document.documentElement.setAttribute("data-theme", saved);
       return saved;
