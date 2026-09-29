@@ -31,3 +31,18 @@ def test_goal_cli_stale_recovery_reports_conflict(planner_home, run_cli):
                                 '--recovery-generation', 'old'])
     assert code == 1
     assert payload['error']['code'] == 'Conflict'
+
+
+def test_goal_cli_delete_requires_exact_title_and_removes_goal(planner_home, run_cli):
+    code, payload, _ = run_cli(['goal', 'create', '--title', 'Remove me', '--request-id', 'cli-delete',
+                                '--recovery-generation', 'none'])
+    assert code == 0, payload
+    goal = payload['data']
+    args = ['goal', 'delete', goal['id'], '--expected-revision', str(goal['revision']),
+            '--recovery-generation', 'none', '--confirm-title']
+    code, payload, _ = run_cli([*args, 'Wrong'])
+    assert code == 1 and payload['error']['code'] == 'ValidationError'
+    code, payload, _ = run_cli([*args, 'Remove me'])
+    assert code == 0 and payload['data']['deleted'] is True
+    code, payload, _ = run_cli(['goal', 'show', goal['id']])
+    assert code == 1 and payload['error']['code'] == 'NotFound'

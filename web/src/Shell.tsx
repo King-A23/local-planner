@@ -68,7 +68,7 @@ export function Shell({
           >
             规划
           </a>
-          <button
+          {(activeSection !== "goals" || agentOpen || agentStatus) && <button
             type="button"
             className={`nav-agent ${agentOpen ? "active" : ""}`}
             aria-expanded={agentOpen}
@@ -79,7 +79,7 @@ export function Shell({
             <span className="agent-nav-sparkle">✨</span>
             <span className="agent-label-long">{agentStatus === "paused" ? "助手已暂停" : agentStatus ? "助手执行中" : "计划助手"}</span>
             <span className="agent-label-short">助手</span>
-          </button>
+          </button>}
           <button
             type="button"
             className="nav-cal"

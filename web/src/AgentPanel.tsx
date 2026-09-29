@@ -108,6 +108,7 @@ export function AgentPanel({ open, onClose, onOpen, triggerRef, surface, date, g
   useEffect(() => { onStatusChange?.(active && run ? run.status : null); }, [active, run?.status, onStatusChange]);
   useEffect(() => { savePreference(draftKey, prompt); }, [draftKey, prompt]);
   useEffect(() => { setPrompt(readPreference(draftKey)); }, [draftKey]);
+  useEffect(() => { setShowMenu(false); }, [mode]);
   useEffect(() => { savePreference(SELECTION_KEY, selected); }, [selected]);
   useEffect(() => {
     if (mode !== "planning" || !draftId) {
@@ -280,12 +281,13 @@ export function AgentPanel({ open, onClose, onOpen, triggerRef, surface, date, g
         {!synced && <p className="agent-connection" role="status">正在重新连接助手，执行状态确认后可继续操作…</p>}
         {!active && (blocked || !items.length) && <div className="agent-setup-hint"><span>{environment?.message ?? "连接一个助手，就能用一句话调整计划。"}</span><button type="button" onClick={() => { onClose(); navigate("/settings#assistant"); }}>连接助手</button></div>}
         {error && <p className="error agent-feedback" role="alert">{error}</p>}
-        {mode === "planning" && planningDraft?.id === draftId && <section className="planning-agent-conversation" aria-label="规划对话">
-          <header><span>规划对话</span>{planningDraft.runStatus === "running" && <small>正在整理</small>}</header>
-          {planningDraft.conversation?.map((turn, index) => <p className={`planning-agent-turn ${turn.role}`} key={`${turn.role}-${turn.createdAt ?? index}`}><b>{turn.role === "user" ? "你" : "助手"}</b><span>{turn.content}</span></p>)}
-          {planningDraft.lastError && <p className="error">{planningDraft.lastError}</p>}
-        </section>}
-        {feedback && run && <div className="agent-floating-receipt-card agent-run-card">
+        {mode === "planning" && planningDraft?.id === draftId && Boolean(planningDraft.conversation?.length) && <details className="planning-agent-conversation" aria-label="规划对话">
+          <summary>查看规划对话（{planningDraft.conversation?.length ?? 0}）</summary>
+          <div className="planning-agent-turns">
+            {planningDraft.conversation?.map((turn, index) => <p className={`planning-agent-turn ${turn.role}`} key={`${turn.role}-${turn.createdAt ?? index}`}><b>{turn.role === "user" ? "你" : "助手"}</b><span>{turn.content}</span></p>)}
+          </div>
+        </details>}
+        {feedback && run && <div className={`agent-floating-receipt-card agent-run-card${planningRun ? " planning-run-card" : ""}${active ? " is-active" : ""}`}>
           <div className="agent-floating-receipt-header">
             <strong role="status">{status}</strong>
             <span className="muted">{Math.floor(run.elapsedSeconds)} 秒</span>
@@ -307,17 +309,17 @@ export function AgentPanel({ open, onClose, onOpen, triggerRef, surface, date, g
             {!result?.ok && <button type="button" className="linkish" onClick={() => { setPrompt(run.prompt); promptRef.current?.focus(); }}>编辑指令后重试</button>}
           </>}
         </div>}
-        {showMenu && <div className="agent-plus-menu">
+        {mode !== "planning" && showMenu && <div className="agent-plus-menu">
           <div className="agent-plus-menu-header">试着这样说</div>
           {ASSISTANT_EXAMPLES.map((example) => <button key={example} type="button" className="agent-plus-menu-item" onClick={() => { setPrompt(example); setShowMenu(false); promptRef.current?.focus(); }}>{example}</button>)}
         </div>}
-        <form ref={composerRef} className="agent-pill-bar" onSubmit={(event) => { event.preventDefault(); send(); }}>
-          <button type="button" className={`agent-pill-control agent-pill-btn-plus${showMenu ? " is-active" : ""}`}
+        <form ref={composerRef} className={`agent-pill-bar${mode === "planning" ? " planning-composer" : ""}`} onSubmit={(event) => { event.preventDefault(); send(); }}>
+          {mode !== "planning" && <button type="button" className={`agent-pill-control agent-pill-btn-plus${showMenu ? " is-active" : ""}`}
             disabled={active || pending} aria-label="指令示例" title="指令示例" aria-expanded={showMenu}
-            onClick={() => setShowMenu((value) => !value)}>+</button>
+            onClick={() => setShowMenu((value) => !value)}>+</button>}
           <textarea ref={promptRef} className="agent-pill-input" id="agent-prompt" aria-label={paused ? "调整执行指令" : "给计划助手的指令"}
             rows={1} value={prompt}
-            disabled={pending || (active && !paused)} placeholder={items.length ? "写下要助手做的事…" : "请先配置计划助手"}
+            disabled={pending || (active && !paused)} placeholder={items.length ? mode === "planning" ? "描述目标，或说明要调整的阶段…" : "写下要助手做的事…" : "请先配置计划助手"}
             onFocus={onOpen}
             onBlur={() => keyboard.current.reset()}
             onCompositionStart={() => keyboard.current.compositionStart()}

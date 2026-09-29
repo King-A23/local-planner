@@ -257,6 +257,31 @@ export function getGoal(id: string): Promise<Goal & Pick<GoalList, "serverToday"
   );
 }
 
+export type GoalDeletionPreview = {
+  id: string;
+  title: string;
+  revision: number;
+  retainedTaskCount: number;
+  detachedChildCount: number;
+  removedDraftCount: number;
+  serverToday: string;
+  recoveryGeneration: string | null;
+};
+
+export function getGoalDeletionPreview(id: string): Promise<GoalDeletionPreview> {
+  return fetch(`/api/goals/${encodeURIComponent(id)}/deletion-preview`).then((r) => readJson<GoalDeletionPreview>(r));
+}
+
+export function deleteGoal(id: string, input: {
+  expectedRevision: number;
+  recoveryGeneration: string | null;
+  confirmTitle: string;
+}): Promise<GoalDeletionPreview & { deleted: true }> {
+  return jsonRequest(`/api/goals/${encodeURIComponent(id)}/delete`, {
+    method: "POST", body: JSON.stringify(input),
+  }).then((r) => readJson<GoalDeletionPreview & { deleted: true }>(r));
+}
+
 export function listGoalCandidates(): Promise<{ items: GoalTask[] }> {
   return fetch("/api/goals/candidates").then((r) => readJson<{ items: GoalTask[] }>(r));
 }

@@ -10,15 +10,18 @@ import {
 import {
   changeGoal,
   createGoal,
+  deleteGoal,
   createPlanningDraft,
   errorMessage,
   getGoal,
+  getGoalDeletionPreview,
   getPlanningDraft,
   listGoalCandidates,
   listGoals,
   listPlanningDrafts,
   updatePlanningDraft,
   type Goal,
+  type GoalDeletionPreview,
   type GoalAction,
   type GoalList,
   type GoalPhase,
@@ -110,28 +113,22 @@ function DraftBanner({
       setBusy(false);
     }
   };
-  if (draft.status === "discarded") return null;
+  if (draft.status === "discarded" || (draft.status === "applied" && !draft.canRevert)) return null;
   const locked = busy || draft.runStatus === "running";
   return (
-    <aside className="planning-draft-banner">
+    <aside className={`planning-draft-banner${draft.status === "applied" ? " is-applied" : ""}`}>
       <div>
-        <span className="page-eyebrow">
-          {draft.status === "applied" ? "已保存的规划" : "规划草案"}
-        </span>
-        <strong>
-          {draft.status === "applied"
-            ? (draft.canRevert ? "规划已保存，仍可撤销这一次保存" : "规划已保存")
-            : draft.runStatus === "running"
+        {draft.status === "applied" ? <strong>
+          规划已保存{draft.changes?.some((change) => change.kind === "goal" && change.type === "removed")
+            ? " · 已移除的目标已收起，任务记录保留"
+            : " · 可还原这次保存"}
+        </strong> : <>
+          <span className="page-eyebrow">规划草案</span>
+          <strong>{draft.runStatus === "running"
               ? "正在整理你的想法"
-              : "先看看这次规划的变化"}
-        </strong>
-        <p>
-          {draft.status === "applied"
-            ? (draft.changes?.some((change) => change.kind === "goal" && change.type === "removed")
-              ? "移除的目标已收起，已有任务和完成记录保留。"
-              : "行动仍留在路线图，准备好时再加入今天。")
-            : draft.lastError || (draft.changes?.length ? `包含 ${draft.changes.length} 项待保存调整` : "描述你的方向，也可以继续调整。") }
-        </p>
+              : "先看看这次规划的变化"}</strong>
+          <p>{draft.lastError || (draft.changes?.length ? `包含 ${draft.changes.length} 项待保存调整` : "描述你的方向，也可以继续调整。")}</p>
+        </>}
       </div>
       <div className="planning-draft-actions">
         {draft.status === "editing" && draft.runStatus !== "running" && (
@@ -243,7 +240,7 @@ function GoalMap({
               {g.title}
               {changed.has(g.id) && <i>草案</i>}
             </b>
-            <small>{g.horizonText || "时间未定"}</small>
+            {g.horizonText && <small>{g.horizonText}</small>}
             <em>
               {g.state === "paused" ? "已暂停 · " : g.state === "ended" ? "已结束 · " : ""}{focus?.title || "尚未设置阶段"}
               {next ? ` · ${next.title}` : ""}
@@ -401,9 +398,8 @@ export function GoalsPage({
     <main className="page goals-page planning-page">
       <header className="planning-heading">
         <div>
-          <span className="page-eyebrow">规划</span>
-          <h1>让方向变成下一步</h1>
-          <p>目标相互支持，行动只在你决定时进入今天。</p>
+          <h1>规划</h1>
+          <p>从目标到阶段，再到下一步。</p>
         </div>
         <div>
           <button
@@ -414,11 +410,11 @@ export function GoalsPage({
             新建目标
           </button>
           <button
-            className="button-primary"
+            className="linkish"
             disabled={busy}
             onClick={() => void describe()}
           >
-            ✦ 描述规划
+            用助手规划
           </button>
         </div>
       </header>
@@ -451,10 +447,7 @@ export function GoalsPage({
         <section className="planning-empty">
           <span>✦</span>
           <h2>从一个想去的方向开始</h2>
-          <p>例如“明年通过 CCF CSP 认证”。</p>
-          <button className="button-primary" onClick={() => void describe()}>
-            描述我的规划
-          </button>
+          <p>新建目标，或用助手描述你的方向。</p>
         </section>
       )}
       {shown.length > 0 && !preview && (
@@ -603,6 +596,9 @@ export function GoalDetailPage({
   } | null>(null);
   const [link, setLink] = useState<GoalAction | null>(null);
   const [draft, setDraft] = useState<PlanningDraft | null>(null);
+  const [deletionPreview, setDeletionPreview] = useState<GoalDeletionPreview | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
   const load = async () => {
     const [g, list] = await Promise.all([getGoal(id), listGoals()]);
     setGoal(g);
@@ -616,6 +612,7 @@ export function GoalDetailPage({
   useEffect(() => {
     setDraft(null); setSelectedId(null); setError(null);
     setGoalEditor(null); setPhaseEditor(undefined); setActionEditor(null); setLink(null);
+    setDeletionPreview(null); setDeleteError(null);
   }, [id]);
 
   useEffect(() => {
@@ -692,6 +689,27 @@ export function GoalDetailPage({
     }
   };
   usePlanningEntry(describe);
+  const previewDeletion = async () => {
+    setDeleteError(null);
+    try { setDeletionPreview(await getGoalDeletionPreview(id)); }
+    catch (e) { setError(errorMessage(e)); }
+  };
+  const confirmDeletion = async (title: string) => {
+    if (!deletionPreview) return;
+    setDeleteBusy(true); setDeleteError(null);
+    try {
+      await deleteGoal(id, { expectedRevision: deletionPreview.revision,
+        recoveryGeneration: deletionPreview.recoveryGeneration, confirmTitle: title });
+      setDeletionPreview(null);
+      onChange?.();
+      window.dispatchEvent(new Event("planner:items-changed"));
+      navigate("/goals");
+    } catch (e) { setDeleteError(errorMessage(e)); }
+    finally { setDeleteBusy(false); }
+  };
+  const deletionDialog = deletionPreview && <GoalDeletionDialog
+    preview={deletionPreview} busy={deleteBusy} error={deleteError}
+    onClose={() => setDeletionPreview(null)} onDelete={confirmDeletion} />;
   if (!goal && !error)
     return (
       <main className="page">
@@ -711,7 +729,8 @@ export function GoalDetailPage({
       : goal;
   const removedFromDraft = draft && !draft.document.goals.some((item) => item.id === goal.id);
   if (draft && (draft.status === "editing" || (draft.status === "applied" && removedFromDraft))) return <main className="page roadmap-page">
-    <div className="goal-back"><a href="/goals" onClick={(e) => handleNavClick(e, "/goals")}>‹ 全部规划</a></div>
+    <div className="goal-back"><a href="/goals" onClick={(e) => handleNavClick(e, "/goals")}>‹ 全部规划</a><button className="linkish" disabled={busy} onClick={() => void previewDeletion()}>完全删除规划</button></div>
+    {error && <p className="error">{error}</p>}
     <DraftBanner draft={draft} onRefresh={async () => { setDraft(await getPlanningDraft(draft.id)); await load(); }}
       onDone={() => { void getPlanningDraft(draft.id).then(setDraft); void load(); }}
       onContinue={() => window.dispatchEvent(new CustomEvent("planner:planning-context", { detail: { draftId: draft.id, goalId: goal.id, selectedPhaseId: selectedId, expectedDraftRevision: draft.revision } }))} />
@@ -721,6 +740,7 @@ export function GoalDetailPage({
           <h2>{draft.status === "applied" ? "已移除" : "将移除"}「{goal.title}」</h2>
           <p>{draft.status === "applied" ? "可以返回全部规划，开始新的规划。" : "保存后从进行中的规划收起。已有任务和完成记录会保留。"}</p>
         </section>}
+    {deletionDialog}
   </main>;
   const stages = [...visibleGoal.phases].sort(
     (a, b) => a.position - b.position,
@@ -759,9 +779,12 @@ export function GoalDetailPage({
           },
         ]
       : []),
+    { label: "完全删除规划", disabled: busy, danger: true, separator: true,
+      run: () => void previewDeletion() },
   ];
   return (
     <main className="page goal-detail-page roadmap-page">
+      {deletionDialog}
       <div className="goal-back">
         <a href="/goals" onClick={(e) => handleNavClick(e, "/goals")}>
           ‹ 全部规划
@@ -796,11 +819,11 @@ export function GoalDetailPage({
         </div>
         <div>
           <button
-            className="button-secondary"
+            className="linkish"
             disabled={busy}
             onClick={() => void describe()}
           >
-            ✦ 调整规划
+            用助手调整
           </button>
           <ItemMenu title="目标" actions={goalMenu} />
         </div>
@@ -1307,6 +1330,31 @@ function GoalEditor({
     </Modal>
   );
 }
+function GoalDeletionDialog({ preview, busy, error, onClose, onDelete }: {
+  preview: GoalDeletionPreview;
+  busy: boolean;
+  error: string | null;
+  onClose: () => void;
+  onDelete: (title: string) => void;
+}) {
+  const [typedTitle, setTypedTitle] = useState("");
+  return <Modal label="完全删除规划" className="goal-dialog" onClose={onClose}>
+    <div className="modal-heading"><span>完全删除规划</span><button type="button" className="icon-button" onClick={onClose}>×</button></div>
+    <form className="goal-editor" onSubmit={(event) => { event.preventDefault(); onDelete(typedTitle); }}>
+      <p>将永久删除「{preview.title}」及其阶段和候选行动，无法从规划中恢复。</p>
+      <p>关联的 {preview.retainedTaskCount} 项正式任务（含已弃置）会保留并解除规划关联；{preview.detachedChildCount} 项支持它的规划会转为独立规划；{preview.removedDraftCount} 份相关草案会删除。已封存日期的历史标签仍会保留。</p>
+      <label>输入完整规划名称以确认
+        <input data-autofocus value={typedTitle} onChange={(event) => setTypedTitle(event.target.value)} autoComplete="off" />
+      </label>
+      {error && <p className="error">{error}</p>}
+      <div className="modal-footer">
+        <button type="button" className="linkish" onClick={onClose}>取消</button>
+        <button type="submit" className="button-danger" disabled={busy || typedTitle !== preview.title}>完全删除</button>
+      </div>
+    </form>
+  </Modal>;
+}
+
 function PhaseEditor({
   phase,
   busy,

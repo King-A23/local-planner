@@ -3133,6 +3133,13 @@ select:focus-visible {
 .planning-agent-turn { display: grid; grid-template-columns: 2.5rem minmax(0, 1fr); gap: .4rem; margin: .45rem 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .88rem; line-height: 1.55; }
 .planning-agent-turn b { color: var(--color-muted); font-size: .78rem; }
 .planning-agent-turn.assistant b { color: var(--color-primary); }
+.agent-pill-bar.planning-composer { grid-template-columns: minmax(0, 1fr) auto auto; grid-template-areas: "input model send"; }
+.planning-agent-conversation { max-height: none; overflow: visible; padding: .4rem .7rem; margin-bottom: .4rem; border-radius: .65rem; }
+.planning-agent-conversation summary { pointer-events: auto; cursor: pointer; color: var(--color-muted); font-size: .76rem; }
+.planning-agent-turns { max-height: min(12rem, 25vh); overflow-y: auto; }
+.agent-run-card.planning-run-card:not(.is-active) { max-height: min(10rem, 25vh); padding: .6rem .8rem; }
+.planning-run-card:not(.is-active) .agent-floating-receipt-header { margin-bottom: .25rem; padding-bottom: .25rem; }
+.planning-run-card:not(.is-active) .agent-feedback { margin: .3rem 0; font-size: .82rem; line-height: 1.45; }
 .layout[data-agent-open="true"] .page { padding-bottom: 17rem; }
 
 [data-theme="warm-paper"] {
@@ -3315,39 +3322,51 @@ select:focus-visible {
 .drag-handle { touch-action: none; user-select: none; -webkit-user-select: none; }
 .drag-preview { position: fixed; z-index: 1000; pointer-events: none; width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 12px 16px; border: 1px solid var(--color-border-subtle); border-radius: 10px; background: var(--color-page-bg); box-shadow: var(--color-shadow-popover); color: var(--color-page-ink); font-size: .9rem; }
 
-/* Planning surfaces keep the map, route and conversation readable at any width. */
-.goal-map-roots { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 21rem), 1fr)); gap: 1.5rem; align-items: start; }
+/* Planning surfaces keep several routes and stages visible together. */
+.planning-heading { margin: .4rem 0 1rem; }
+.planning-heading h1 { font-size: clamp(1.45rem, 2.5vw, 1.8rem); }
+.planning-heading p { font-size: .84rem; }
+.planning-heading > div:last-child { gap: .8rem; }
+.planning-empty { min-height: 15rem; }
+.goal-map { padding: .8rem; background: var(--surface-raised); }
+.goal-map-legend { margin-bottom: .7rem; }
+.goal-map-roots { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 15.5rem), 1fr)); gap: .75rem; align-items: start; }
 .goal-map-roots > .goal-map-node + .goal-map-node { margin-top: 0; }
-.goal-map-children { grid-template-columns: minmax(0, 1fr); margin-left: 1rem; }
+.goal-map-node + .goal-map-node { margin-top: .5rem; }
+.goal-map-children { grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr)); gap: .5rem; margin: .45rem 0 0 .55rem; padding: .45rem 0 0 .65rem; }
 .goal-map-node.related > .goal-map-children { border-color: var(--color-link); }
+.goal-map-card { gap: .5rem; padding: .65rem .7rem; }
+.goal-map-node.depth-0 > .goal-map-card { max-width: 22rem; }
 .goal-map-card b { white-space: normal; overflow-wrap: anywhere; line-height: 1.5; }
+.goal-map-card em { margin-top: .2rem; }
 .map-inactive-toggle { display: block; margin-top: 1.25rem; font-size: .85rem; }
-.roadmap-track-section { overflow: auto; }
-.roadmap-track { min-width: 0; width: max-content; max-width: none; gap: .6rem; }
-.roadmap-stage { flex: none; min-width: 11.5rem; padding: .8rem .7rem; grid-template-columns: 1.5rem minmax(0, 1fr); }
-.roadmap-stage:not(:last-child)::after { top: 1.5rem; left: 2.25rem; right: -.8rem; }
-.roadmap-stage b { white-space: normal; overflow-wrap: anywhere; background: var(--color-card-bg); line-height: 1.5; padding-left: .15rem; }
-.roadmap-stage.selected b { background: var(--color-subtle-bg); }
-.roadmap-draft { display: block; padding: 1.25rem; }
+.roadmap-track-section { padding: .85rem 1rem; }
+.roadmap-track { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 10.5rem), 1fr)); width: 100%; min-width: 0; gap: .45rem; }
+.roadmap-stage { width: 100%; min-width: 0; padding: .55rem .6rem; border: 1px solid var(--border-subtle); background: var(--surface-raised); grid-template-columns: 1.5rem minmax(0, 1fr); }
+.roadmap-stage:not(:last-child)::after { display: none; }
+.roadmap-stage b { white-space: normal; overflow-wrap: anywhere; line-height: 1.4; padding-left: .15rem; }
+.roadmap-stage.selected { border-color: var(--color-link); }
+.roadmap-draft { display: block; padding: 1rem; }
 .roadmap-draft > .roadmap-heading { margin-top: 0; }
-.roadmap-draft > .roadmap-heading h2 { font-size: 1.5rem; }
-.roadmap-draft .roadmap-focus { margin-top: 1rem; }
+.roadmap-draft > .roadmap-heading h2 { font-size: 1.3rem; }
+.roadmap-draft .roadmap-focus { margin-top: .75rem; }
+.roadmap-focus { padding: 1rem; }
+.roadmap-heading { margin-bottom: 1rem; }
+.planning-draft-banner { padding: .75rem .9rem; }
+.planning-draft-banner.is-applied { margin-bottom: .7rem; padding: .5rem .75rem; border-radius: .7rem; }
+.planning-draft-banner.is-applied strong { margin: 0; font-size: .8rem; font-weight: 500; }
 .roadmap-draft .button-primary { width: auto; }
 .roadmap-action-list button:disabled { cursor: default; }
 .roadmap-focus-head > div:first-child { min-width: 0; }
 .roadmap-action-list li > div:first-child > button { max-width: calc(100% - 1.5rem); overflow-wrap: anywhere; vertical-align: top; }
 .roadmap-outcome, .roadmap-notes { white-space: pre-wrap; overflow-wrap: anywhere; }
-.planning-agent-conversation { max-height: min(15rem, 32vh); overflow-y: auto; padding: .8rem 1rem; margin-bottom: .65rem; border: 1px solid var(--color-border-subtle); border-radius: 1rem; background: var(--color-card-bg); box-shadow: var(--color-shadow-popover); }
-.planning-agent-conversation header { display: flex; justify-content: space-between; font-size: .8rem; color: var(--color-muted); }
+.planning-agent-conversation { background: var(--color-card-bg); }
 .planning-agent-turn { display: grid; grid-template-columns: 2.5rem minmax(0, 1fr); gap: .5rem; margin: .75rem 0 0; font-size: .83rem; line-height: 1.65; white-space: pre-wrap; }
 .planning-agent-turn b { color: var(--color-muted); font-weight: 500; }
 .planning-agent-turn span { overflow-wrap: anywhere; }
 @media (max-width: 760px) {
   .planning-heading, .roadmap-heading { flex-wrap: wrap; }
   .planning-heading > div:last-child, .roadmap-heading > div:last-child { flex-wrap: wrap; }
-  .roadmap-track { width: 100%; display: flex; flex-direction: column; gap: .25rem; }
-  .roadmap-stage { width: 100%; min-width: 0; }
-  .roadmap-stage:not(:last-child)::after { left: 1.4rem; top: 2.1rem; bottom: -.8rem; width: 1px; height: auto; right: auto; }
   .roadmap-focus-head { flex-wrap: wrap; }
   .roadmap-action-list li { flex-wrap: wrap; gap: .6rem; }
   .roadmap-action-list li > div:first-child { flex-basis: 100%; }

@@ -55,7 +55,7 @@ def test_v7_backup_restores_and_migrates_goal_fields_to_null(tmp_path: Path) -> 
     try:
         result = restore(live.conn, tmp_path, old_backup, CLOCK)
         assert result["ok"] is True
-        assert live.conn.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == 10
+        assert live.conn.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == 11
         assert tuple(
             live.conn.execute("SELECT goal_id, phase_id FROM tasks WHERE id = 'old-task'").fetchone()
         ) == (None, None)

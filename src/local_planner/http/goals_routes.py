@@ -24,6 +24,13 @@ class GoalCreateBody(BaseModel):
     recoveryGeneration: str | None
 
 
+class GoalDeleteBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expectedRevision: int = Field(ge=1)
+    recoveryGeneration: str | None
+    confirmTitle: str
+
+
 class GoalActionBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     operation: Literal[
@@ -228,6 +235,24 @@ def mount_goals(
                 raise NotFound("找不到目标")
             return _response(ctx, goal, today)
         return locked(ctx, read)
+
+    @app.get("/api/goals/{goal_id}/deletion-preview")
+    def preview_deletion(goal_id: str) -> dict[str, Any]:
+        return locked(ctx, lambda today: goals.deletion_preview(ctx.uow, goal_id) | {
+            "serverToday": today, "recoveryGeneration": _generation(ctx),
+        })
+
+    @app.post("/api/goals/{goal_id}/delete")
+    def delete_goal(goal_id: str, body: GoalDeleteBody) -> dict[str, Any]:
+        def remove(today: str) -> dict[str, Any]:
+            _check_generation(ctx, body.recoveryGeneration)
+            result = goals.delete_goal_permanently(
+                ctx.clock, ctx.uow, goal_id, expected_revision=body.expectedRevision,
+                confirm_title=body.confirmTitle,
+            )
+            return result | {"deleted": True, "serverToday": today,
+                             "recoveryGeneration": _generation(ctx)}
+        return locked(ctx, remove)
 
     @app.post("/api/goals")
     def create_goal(body: GoalCreateBody) -> dict[str, Any]:

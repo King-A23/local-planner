@@ -158,6 +158,12 @@ def _run(args: Any, today: str, clock: Any, uow: Any) -> dict[str, Any]:
         )
     if command.startswith("goal."):
         _require_generation(uow, args.recovery_generation)
+        if command == "goal.delete":
+            return goals.delete_goal_permanently(
+                clock, uow, args.goal_id, expected_revision=args.expected_revision,
+                confirm_title=args.confirm_title,
+            ) | {"deleted": True, "serverToday": today,
+                 "recoveryGeneration": uow.meta.get("recovery_generation")}
         operation: str
         values: dict[str, Any]
         if command == "goal.edit":

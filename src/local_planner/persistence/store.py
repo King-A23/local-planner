@@ -109,13 +109,18 @@ class SqliteUnitOfWork:
                 position=excluded.position, status=excluded.status, outcome=excluded.outcome, horizon_text=excluded.horizon_text
         """, (phase.id, phase.goal_id, phase.title, phase.notes, phase.position, phase.status, phase.outcome, phase.horizon_text))
 
-    def list_goal_tasks(self, goal_id: str) -> list[Task]:
+    def list_goal_tasks(self, goal_id: str, *, include_discarded: bool = False) -> list[Task]:
         rows = self.conn.execute("""
             SELECT t.*, ro.series_id AS recurrence_series_id, ro.occurrence_date AS recurrence_occurrence_date
             FROM tasks t LEFT JOIN recurrence_occurrences ro ON ro.kind = 'plan' AND ro.entity_id = t.id
-            WHERE t.goal_id = ? AND t.discarded_at IS NULL ORDER BY t.created_at, t.id
-        """, (goal_id,))
+            WHERE t.goal_id = ? AND (? OR t.discarded_at IS NULL) ORDER BY t.created_at, t.id
+        """, (goal_id, include_discarded))
         return [_task_from_row(row) for row in rows]
+
+    def clear_goal_snapshots(self, goal_id: str) -> None:
+        self.conn.execute("""UPDATE day_task_entries SET goal_id_snapshot=NULL, goal_title_snapshot=NULL,
+            phase_id_snapshot=NULL, phase_title_snapshot=NULL WHERE goal_id_snapshot=?
+            AND NOT EXISTS (SELECT 1 FROM days WHERE date=day_task_entries.day_date AND status='sealed')""", (goal_id,))
 
     def get_goal_action(self, action_id: str) -> GoalAction | None:
         row = self.conn.execute("SELECT * FROM goal_actions WHERE id = ?", (action_id,)).fetchone()

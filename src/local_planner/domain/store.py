@@ -38,6 +38,8 @@ class PlanningStore(Protocol):
 
     def save(self, draft: dict[str, Any]) -> None: ...
 
+    def delete(self, draft_id: str) -> None: ...
+
     def get_request(self, request_id: str) -> tuple[str, str] | None: ...
 
     def save_request(self, request_id: str, fingerprint: str, draft_id: str) -> None: ...
@@ -63,7 +65,9 @@ class UnitOfWork(Protocol):
 
     def save_phase(self, phase: GoalPhase) -> None: ...
 
-    def list_goal_tasks(self, goal_id: str) -> list[Task]: ...
+    def list_goal_tasks(self, goal_id: str, *, include_discarded: bool = False) -> list[Task]: ...
+
+    def clear_goal_snapshots(self, goal_id: str) -> None: ...
 
     def get_goal_action(self, action_id: str) -> GoalAction | None: ...
 
@@ -172,6 +176,10 @@ class InMemoryPlanningStore:
     def save(self, draft: dict[str, Any]) -> None:
         self._drafts[draft["id"]] = copy.deepcopy(draft)
 
+    def delete(self, draft_id: str) -> None:
+        self._drafts.pop(draft_id, None)
+        self._requests = {key: value for key, value in self._requests.items() if value[1] != draft_id}
+
     def get_request(self, request_id: str) -> tuple[str, str] | None:
         return self._requests.get(request_id)
 
@@ -222,8 +230,16 @@ class InMemoryUnitOfWork:
     def save_phase(self, phase: GoalPhase) -> None:
         self._phases[phase.id] = phase
 
-    def list_goal_tasks(self, goal_id: str) -> list[Task]:
-        return sorted((t for t in self._tasks.values() if t.goal_id == goal_id and t.discarded_at is None), key=lambda t: (t.created_at, t.id))
+    def list_goal_tasks(self, goal_id: str, *, include_discarded: bool = False) -> list[Task]:
+        return sorted((t for t in self._tasks.values() if t.goal_id == goal_id and (include_discarded or t.discarded_at is None)), key=lambda t: (t.created_at, t.id))
+
+    def clear_goal_snapshots(self, goal_id: str) -> None:
+        from dataclasses import replace
+        for key, entry in self._entries.items():
+            day = self.get_day(entry.day_date)
+            if entry.goal_id_snapshot == goal_id and (day is None or day.status != "sealed"):
+                self._entries[key] = replace(entry, goal_id_snapshot=None, goal_title_snapshot=None,
+                                             phase_id_snapshot=None, phase_title_snapshot=None)
 
     def get_goal_action(self, action_id: str) -> GoalAction | None:
         return self._goal_actions.get(action_id)
@@ -248,6 +264,8 @@ class InMemoryUnitOfWork:
 
     def delete_goal(self, goal_id: str) -> None:
         self._goals.pop(goal_id, None)
+        self._goal_requests = {key: (fingerprint, None if target == goal_id else target)
+                               for key, (fingerprint, target) in self._goal_requests.items()}
 
     def get_goal_request(self, request_id: str) -> tuple[str, str] | None:
         return self._goal_requests.get(request_id)

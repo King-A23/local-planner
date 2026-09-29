@@ -99,6 +99,8 @@ def _request(uow: UnitOfWork, request_id: str, values: dict) -> tuple[str, Goal 
     if prior:
         if prior[0] != fingerprint:
             raise Conflict("同一 requestId 已用于不同操作，请核对后重试")
+        if prior[1] is None or uow.get_goal(prior[1]) is None:
+            raise Conflict("这次创建的目标已被完全删除，请使用新的 requestId")
         return fingerprint, require_goal(uow, prior[1])
     return fingerprint, None
 
@@ -119,6 +121,59 @@ def create_goal(clock: Clock, uow: UnitOfWork, title: str, *, notes: str = "",
     uow.save_goal(goal)
     uow.save_goal_request(request_id, fingerprint, goal.id)
     return goal
+
+
+def _references_goal(value: Any, goal_id: str) -> bool:
+    if isinstance(value, dict):
+        return any(_references_goal(item, goal_id) for item in value.values())
+    if isinstance(value, list):
+        return any(_references_goal(item, goal_id) for item in value)
+    return value == goal_id
+
+
+def deletion_preview(uow: UnitOfWork, goal_id: str) -> dict[str, Any]:
+    goal = require_goal(uow, goal_id)
+    drafts = [draft for draft in uow.planning.list() if _references_goal(draft, goal_id)]
+    return {
+        "id": goal.id,
+        "title": goal.title,
+        "revision": goal.revision,
+        "retainedTaskCount": len(uow.list_goal_tasks(goal_id, include_discarded=True)),
+        "detachedChildCount": sum(child.parent_goal_id == goal_id for child in uow.list_goals()),
+        "removedDraftCount": len(drafts),
+    }
+
+
+def delete_goal_permanently(clock: Clock, uow: UnitOfWork, goal_id: str, *,
+                            expected_revision: int, confirm_title: str) -> dict[str, Any]:
+    """Remove one planning goal while retaining formal tasks and other goals."""
+    goal = require_goal(uow, goal_id)
+    if type(expected_revision) is not int or goal.revision != expected_revision:
+        raise Conflict("目标已发生变化，请刷新后重试")
+    if confirm_title != goal.title:
+        raise ValidationError("请输入完整的目标名称以确认删除")
+    drafts = [draft for draft in uow.planning.list() if _references_goal(draft, goal_id)]
+    if any(draft.get("runStatus") == "running" for draft in drafts):
+        raise Conflict("助手正在调整相关规划，请先等待或停止后再删除")
+    preview = deletion_preview(uow, goal_id)
+    for draft in drafts:
+        uow.planning.delete(draft["id"])
+        if uow.meta.get("latest_planning_save") == draft["id"]:
+            uow.meta.set("latest_planning_save", "")
+    for child in uow.list_goals():
+        if child.parent_goal_id == goal_id:
+            _save_changed(clock, uow, child, parent_goal_id=None)
+    # Goal pointers must be cleared before their referenced actions and phases.
+    uow.save_goal(replace(goal, next_task_id=None, next_action_id=None, focus_phase_id=None))
+    for task in uow.list_goal_tasks(goal_id, include_discarded=True):
+        uow.save_task(replace(task, goal_id=None, phase_id=None))
+    uow.clear_goal_snapshots(goal_id)
+    for action in uow.list_goal_actions(goal_id):
+        uow.delete_goal_action(action.id)
+    for phase in uow.list_phases(goal_id):
+        uow.delete_phase(phase.id)
+    uow.delete_goal(goal_id)
+    return preview
 
 
 def snapshot_fields(uow: UnitOfWork, task: Task) -> dict[str, str | None]:

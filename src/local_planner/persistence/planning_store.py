@@ -21,6 +21,10 @@ class PlanningStore:
             "ON CONFLICT(id) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at",
             (draft["id"], json.dumps(draft, ensure_ascii=False), draft["updatedAt"]))
 
+    def delete(self, draft_id):
+        self.conn.execute("DELETE FROM planning_requests WHERE draft_id=?", (draft_id,))
+        self.conn.execute("DELETE FROM planning_drafts WHERE id=?", (draft_id,))
+
     def get_request(self, request_id):
         row = self.conn.execute("SELECT fingerprint,draft_id FROM planning_requests WHERE request_id=?",
                                 (request_id,)).fetchone()

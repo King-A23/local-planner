@@ -77,6 +77,11 @@ def _goal_parser(top: argparse._SubParsersAction[DomainParser]) -> None:
     show = _leaf(sub, "show", "goal.show")
     show.add_argument("goal_id")
 
+    delete = _leaf(sub, "delete", "goal.delete")
+    delete.add_argument("goal_id")
+    delete.add_argument("--confirm-title", required=True)
+    _goal_write(delete)
+
     create = _leaf(sub, "create", "goal.create")
     create.add_argument("--title", required=True)
     create.add_argument("--notes", default="")
