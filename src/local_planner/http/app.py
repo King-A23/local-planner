@@ -939,7 +939,7 @@ def create_app(
         acquired the cross-window lease by then, so persisted run state cannot
         claim an agent is running when it never got ownership of the process.
         """
-        from local_planner.domain.planning import begin_draft_run, finish_draft_run
+        from local_planner.domain.planning import agent_draft_context, begin_draft_run, finish_draft_run
 
         items = load_launchers(ctx.data_dir)
         found = next((item for item in items if item.id == launcher_id), None)
@@ -978,7 +978,7 @@ def create_app(
         result, plan_result = run_planning_launcher(
             found,
             body.prompt,
-            planning_context=started,
+            planning_context=agent_draft_context(started),
             timeout=600,
             data_root=ctx.data_dir,
             scope_goal_id=started.get("scopeGoalId"),
@@ -1027,7 +1027,7 @@ def create_app(
                         **kwargs,
                     ),
                 )
-                status, message = "succeeded", plan_result.get("message") or plan_result.get("question")
+                status, message = "succeeded", finished["conversation"][-1]["content"]
         except DomainError as exc:
             # Invalid model output is a failed draft run, not a failed app
             # request.  Persist the reason and retain the last valid draft.
@@ -1040,7 +1040,7 @@ def create_app(
                     error=exc.message,
                 ),
             )
-            status, message = "failed", "规划结果无法应用，之前的草案已保留。"
+            status, message = "failed", f"{exc.message}。本次未更改草案或正式规划。"
         return {
             "ok": status == "succeeded",
             "status": status,

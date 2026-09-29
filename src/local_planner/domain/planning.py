@@ -69,6 +69,8 @@ def _changes(before, after):
                 if aa == bb:
                     continue
             goal_id, item = b or a
+            if kind != "goal" and goal_id not in _index(after):
+                continue
             rows.append({"kind": kind, "id": entity_id, "goalId": goal_id,
                          "type": "added" if a is None else "removed" if b is None else "modified",
                          "title": item["title"]})
@@ -256,11 +258,11 @@ def normalize_document(uow, draft, document):
             if any(goal[key] != base.get(key) for key in structural_keys):
                 raise Conflict("目标已结束，请先恢复目标")
         result.append(goal)
-    if draft["scopeGoalId"] and draft["scopeGoalId"] not in seen_goals:
-        raise ValidationError("当前目标不能从自己的草案中移除")
+    # Removing a whole goal archives its structure and formal Tasks intact.
+    # Ended records included by manual/legacy drafts remain protected.
     for gid, old in baseline.items():
-        if gid not in seen_goals and (old.get("tasks") or any(a.get("taskId") for a in old.get("actions", [])) or old["state"] == "ended"):
-            raise ValidationError("保留有正式任务或已结束目标的记录；请通过目标状态操作收起")
+        if gid not in seen_goals and old["state"] == "ended":
+            raise ValidationError("已结束目标的历史记录会保留，不能在草案中删除")
     _validate_graph(uow, {"goals": result})
     return {"goals": result}
 
@@ -275,6 +277,51 @@ def _save(clock, uow, draft):
 def _push(draft):
     draft["history"].append(copy.deepcopy(draft["document"]))
     draft["history"] = draft["history"][-20:]
+
+
+def agent_draft_context(draft):
+    """Archived goals are history, never candidates for implicit reuse.
+
+    Keep them in the persisted baseline for conflict detection and safe undo,
+    but do not hand deleted goals back to the model as editable planning work.
+    """
+    context = copy.deepcopy(draft)
+    if draft["scopeGoalId"]:
+        return context
+    for key in ("document", "baseDocument"):
+        context[key]["goals"] = [g for g in context[key]["goals"] if g["state"] != "ended"]
+    visible = {g["id"] for g in context["document"]["goals"]}
+    context["baseGoalRevisions"] = {k: v for k, v in context["baseGoalRevisions"].items() if k in visible}
+    context["changes"] = [c for c in context.get("changes", []) if c["goalId"] in visible]
+    parents = {g.get("parentGoalId") for g in context["document"]["goals"]}
+    context["referenceGoals"] = [{"id": g["id"], "title": g["title"], "state": g["state"]}
+                                 for g in draft["document"]["goals"] if g["id"] in parents - visible]
+    return context
+
+
+def _agent_document(draft, document):
+    if draft["scopeGoalId"] or not isinstance(document, dict) or not isinstance(document.get("goals"), list):
+        return document
+    archived = [g for g in draft["document"]["goals"] if g["state"] == "ended"]
+    archived_ids = {g["id"] for g in archived}
+    if any(isinstance(g, dict) and g.get("id") in archived_ids for g in document["goals"]):
+        raise ValidationError("助手尝试复用已删除或已结束的目标。重新规划应创建新目标，原记录保持不变")
+    return {**document, "goals": [*document["goals"], *copy.deepcopy(archived)]}
+
+
+def _draft_receipt(before, after):
+    changes = _changes(before, after)
+    if not changes:
+        return "草案没有变化，正式规划未改动。"
+    labels = {"goal": "目标", "phase": "阶段", "action": "候选行动"}
+    verbs = {"added": "新增", "modified": "调整", "removed": "移除"}
+    counts = {}
+    for change in changes:
+        key = (change["type"], change["kind"])
+        counts[key] = counts.get(key, 0) + 1
+    detail = "、".join(f"{verbs[operation]} {count} 个{labels[kind]}" for (operation, kind), count in counts.items())
+    preservation = "移除目标会保留已有任务和完成记录。" if counts.get(("removed", "goal")) else ""
+    return f"草案已更新：{detail}。{preservation}点击“保存规划”后生效，正式规划尚未改动。"
 
 
 def begin_draft_run(clock, uow, draft_id, *, expected_revision, recovery_generation, prompt, request_id, selected_phase_id=None):
@@ -305,7 +352,8 @@ def finish_draft_run(clock, uow, draft_id, *, request_id, recovery_generation, d
         if document is not None and question is not None:
             raise ValidationError("助手应返回规划或问题，不能同时返回两者")
         if document is not None:
-            normalized = normalize_document(uow, draft, document)
+            normalized = normalize_document(uow, draft, _agent_document(draft, document))
+            message = _draft_receipt(draft["document"], normalized)
             _push(draft)
             draft["document"] = normalized
         elif not isinstance(question, str) or not question.strip():

@@ -50,7 +50,8 @@ Path(os.environ["LOCAL_PLANNER_PLAN_RESULT_FILE"]).write_text(json.dumps({"docum
     finished = _wait(client, response.json()["id"])
     assert finished["status"] == "succeeded"
     assert finished["result"]["draft"]["runStatus"] == "succeeded"
-    assert finished["result"]["draft"]["conversation"][-1]["content"] == "草案已生成"
+    assert finished["result"]["draft"]["conversation"][-1]["content"] == "草案没有变化，正式规划未改动。"
+    assert finished["result"]["message"] == "草案没有变化，正式规划未改动。"
 
 
 def test_planning_run_reports_stale_draft_revision_without_starting_launcher(client, tmp_path) -> None:
@@ -130,3 +131,35 @@ def test_global_draft_phase_selection_is_sent_to_planning_agent(client, tmp_path
         "selectedPhaseId":"selected-phase","recoveryGeneration":None})
     assert response.status_code==202,response.text
     assert _wait(client,response.json()["id"])["status"]=="succeeded"
+
+
+def test_agent_cannot_resurrect_archived_goal_and_reports_actual_rejection(client, tmp_path):
+    # A model can remember an old ID from conversation even when it is omitted
+    # from editable context. The host must reject it without a false success.
+    draft = client.post('/api/planning/drafts', json={'requestId': 'seed-archived', 'recoveryGeneration': None}).json()
+    def change(d, operation, **kw):
+        response = client.post(f"/api/planning/drafts/{d['id']}/actions", json={
+            'operation': operation, 'expectedRevision': d['revision'], 'recoveryGeneration': None,
+            'requestId': f"{d['id']}-{d['revision']}-{operation}", **kw})
+        assert response.status_code == 200, response.text
+        return response.json()
+    change(change(draft, 'update', document={'goals': [{'id': 'old-goal', 'title': '原规划'}]}), 'apply')
+    draft = client.post('/api/planning/drafts', json={'requestId': 'remove-archived', 'recoveryGeneration': None}).json()
+    change(change(draft, 'update', document={'goals': []}), 'apply')
+    draft = client.post('/api/planning/drafts', json={'requestId': 'new-after-archive', 'recoveryGeneration': None}).json()
+    old_goal = client.get('/api/goals/old-goal').json()
+    script = tmp_path / 'bad-reuse.py'
+    script.write_text("import json,os\nfrom pathlib import Path\nc=json.loads(Path(os.environ['LOCAL_PLANNER_CONTEXT_FILE']).read_text())\nassert c['document']['goals']==[]\nPath(os.environ['LOCAL_PLANNER_PLAN_RESULT_FILE']).write_text(json.dumps({'document':{'goals':[{'id':'old-goal','title':'原规划','state':'active'}]},'message':'已经恢复成功'}))")
+    launcher = client.post('/api/launchers', json={'name': 'bad reuse', 'command': shlex.join([sys.executable, str(script)])}).json()
+    response = client.post('/api/agent-runs', json={
+        'launcherId': launcher['id'], 'requestId': 'bad-reuse-run', 'prompt': '重新规划',
+        'surface': 'goals', 'mode': 'planning', 'draftId': draft['id'],
+        'expectedDraftRevision': draft['revision'], 'recoveryGeneration': None})
+    assert response.status_code == 202
+    finished = _wait(client, response.json()['id'])
+    assert finished['status'] == 'failed'
+    assert '尝试复用已删除或已结束的目标' in finished['result']['message']
+    assert '本次未更改草案或正式规划' in finished['result']['message']
+    assert '已经恢复成功' not in finished['result']['message']
+    assert finished['result']['draft']['document'] == draft['document']
+    assert client.get('/api/goals/old-goal').json() == old_goal

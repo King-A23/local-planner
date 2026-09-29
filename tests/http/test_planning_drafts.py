@@ -237,3 +237,48 @@ def test_only_latest_planning_save_can_be_reverted(client):
     assert rejected.status_code == 409
     action(client, second, 'revert')
     assert client.get('/api/goals/csp').json()['notes'] == ''
+
+
+def test_scoped_goal_removal_archives_and_preserves_formal_tasks_and_undo(client, uow):
+    saved(client)
+    g = client.get('/api/goals/csp').json()
+    linked = client.post('/api/goals/csp/actions', json={
+        'operation': 'materialize-action', 'actionId': 'first-action', 'destination': 'today',
+        'expectedRevision': g['revision'], 'recoveryGeneration': None, 'requestId': 'task-before-delete'}).json()
+    task_id = linked['actions'][0]['taskId']
+    before_task = uow.get_task(task_id)
+    before_phase = uow.get_phase('foundation')
+    draft = action(client, create(client, goalId='csp'), 'update', document={'goals': []})
+    assert draft['changes'] == [{'kind': 'goal', 'id': 'csp', 'goalId': 'csp', 'type': 'removed', 'title': '通过 CSP'}]
+    assert uow.get_goal('csp').state == 'active'
+    applied = action(client, draft, 'apply')
+    assert uow.get_goal('csp').state == 'ended'
+    assert uow.get_task(task_id) == before_task
+    assert uow.get_phase('foundation') == before_phase
+    action(client, applied, 'revert')
+    assert uow.get_goal('csp').state == 'active'
+    assert uow.get_task(task_id) == before_task
+
+
+def test_deleted_goal_is_not_an_agent_reuse_candidate_and_new_plan_preserves_history(client, uow, clock):
+    saved(client)
+    action(client, action(client, create(client), 'update', document={'goals': []}), 'apply')
+    old = uow.get_goal('csp')
+    draft = create(client)
+    context = planning.agent_draft_context(draft)
+    assert context['document']['goals'] == []
+    assert context['baseDocument']['goals'] == []
+    assert context['baseGoalRevisions'] == {}
+    assert len(draft['document']['goals']) == 2  # persistence still protects history
+    with uow.transaction():
+        planning.begin_draft_run(clock, uow, draft['id'], expected_revision=draft['revision'],
+            recovery_generation=None, prompt='重新规划同一个方向', request_id='new-planning')
+        result = planning.finish_draft_run(clock, uow, draft['id'], request_id='new-planning',
+            recovery_generation=None, document={'goals': [{'id': 'new-csp', 'title': '通过 CSP'}]},
+            message='我已经恢复了旧目标')
+    assert '恢复了' not in result['conversation'][-1]['content']
+    assert '正式规划尚未改动' in result['conversation'][-1]['content']
+    applied = action(client, result, 'apply')
+    assert uow.get_goal('csp') == old
+    assert uow.get_goal('new-csp').state == 'active'
+    assert uow.get_phase('foundation') is not None

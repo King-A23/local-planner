@@ -120,13 +120,17 @@ function DraftBanner({
         </span>
         <strong>
           {draft.status === "applied"
-            ? "规划已保存，仍可撤销这一次保存"
+            ? (draft.canRevert ? "规划已保存，仍可撤销这一次保存" : "规划已保存")
             : draft.runStatus === "running"
               ? "正在整理你的想法"
               : "先看看这次规划的变化"}
         </strong>
         <p>
-          {draft.status === "applied" ? "行动仍留在路线图，准备好时再加入今天。" : draft.lastError || (draft.changes?.length ? `包含 ${draft.changes.length} 项待保存调整` : "描述你的方向，也可以继续调整。") }
+          {draft.status === "applied"
+            ? (draft.changes?.some((change) => change.kind === "goal" && change.type === "removed")
+              ? "移除的目标已收起，已有任务和完成记录保留。"
+              : "行动仍留在路线图，准备好时再加入今天。")
+            : draft.lastError || (draft.changes?.length ? `包含 ${draft.changes.length} 项待保存调整` : "描述你的方向，也可以继续调整。") }
         </p>
       </div>
       <div className="planning-draft-actions">
@@ -705,12 +709,18 @@ export function GoalDetailPage({
       ? ((draft.document.goals.find((item) => item.id === goal.id) as
           Goal | undefined) ?? goal)
       : goal;
-  if (draft?.status === "editing") return <main className="page roadmap-page">
+  const removedFromDraft = draft && !draft.document.goals.some((item) => item.id === goal.id);
+  if (draft && (draft.status === "editing" || (draft.status === "applied" && removedFromDraft))) return <main className="page roadmap-page">
     <div className="goal-back"><a href="/goals" onClick={(e) => handleNavClick(e, "/goals")}>‹ 全部规划</a></div>
     <DraftBanner draft={draft} onRefresh={async () => { setDraft(await getPlanningDraft(draft.id)); await load(); }}
       onDone={() => { void getPlanningDraft(draft.id).then(setDraft); void load(); }}
       onContinue={() => window.dispatchEvent(new CustomEvent("planner:planning-context", { detail: { draftId: draft.id, goalId: goal.id, selectedPhaseId: selectedId, expectedDraftRevision: draft.revision } }))} />
-    <DraftGoalPreview key={visibleGoal.id} goal={visibleGoal} goals={all} draft={draft} onChanged={setDraft} onSelect={setSelectedId} onClose={() => navigate("/goals")} />
+    {!removedFromDraft
+      ? <DraftGoalPreview key={visibleGoal.id} goal={visibleGoal} goals={all} draft={draft} onChanged={setDraft} onSelect={setSelectedId} onClose={() => navigate("/goals")} />
+      : <section className="planning-empty">
+          <h2>{draft.status === "applied" ? "已移除" : "将移除"}「{goal.title}」</h2>
+          <p>{draft.status === "applied" ? "可以返回全部规划，开始新的规划。" : "保存后从进行中的规划收起。已有任务和完成记录会保留。"}</p>
+        </section>}
   </main>;
   const stages = [...visibleGoal.phases].sort(
     (a, b) => a.position - b.position,

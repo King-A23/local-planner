@@ -206,7 +206,9 @@ export function AgentPanel({ open, onClose, onOpen, triggerRef, surface, date, g
   async function submitPrompt(launcherId = selected, context = {
     surface, date, goalId,
     ...((surface === "goals" || surface === "goal") ? { recoveryGeneration } : {}),
-    ...(mode === "planning" ? { mode, draftId, selectedPhaseId, expectedDraftRevision: currentPlanningRevision } : {}),
+    ...(mode === "planning" ? { mode, draftId,
+      selectedPhaseId: planningDraft?.document.goals.some((g) => g.phases?.some((p) => p.id === selectedPhaseId)) ? selectedPhaseId : null,
+      expectedDraftRevision: currentPlanningRevision } : {}),
   }) {
     const text = prompt.trim();
     if (!text || !launcherId) return;
