@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import socket
+import shutil
 import subprocess
 import sys
 import time
@@ -16,6 +17,21 @@ import pytest
 
 from local_planner import launchers
 from local_planner.desktop import bind_listener
+
+
+@pytest.mark.skipif(sys.platform != "darwin" or not shutil.which("xcrun"), reason="requires the macOS Swift compiler")
+def test_native_navigation_interruption_does_not_hide_real_failures(tmp_path):
+    root = Path(__file__).resolve().parents[1]
+    executable = tmp_path / "navigation-failure-checks"
+    subprocess.run(
+        ["xcrun", "swiftc", "-swift-version", "5",
+         str(root / "desktop/macos/NavigationFailure.swift"),
+         str(root / "tests/desktop/navigation_failure_checks.swift"),
+         "-o", str(executable)],
+        capture_output=True, text=True, check=True, timeout=60,
+    )
+    result = subprocess.run([str(executable)], capture_output=True, text=True, check=True, timeout=10)
+    assert "8 navigation failure checks passed" in result.stdout
 
 
 @contextmanager

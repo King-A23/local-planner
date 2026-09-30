@@ -380,7 +380,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-        guard (error as NSError).code != NSURLErrorCancelled else { return }
+        if NavigationFailure.isExpectedInterruption(error) {
+            let failure = error as NSError
+            FileHandle.standardError.write(Data("Ignored navigation interruption: domain=\(failure.domain) code=\(failure.code)\n".utf8))
+            return
+        }
         if webView === settingsWebView, let settingsWindow {
             let alert = NSAlert()
             alert.messageText = "设置暂时无法打开"
@@ -640,8 +644,13 @@ final class QuickEntryPanel: NSPanel {
     override func cancelOperation(_ sender: Any?) { onCancel?() }
 }
 
-let application = NSApplication.shared
-let delegate = AppDelegate()
-application.setActivationPolicy(.regular)
-application.delegate = delegate
-application.run()
+@main
+struct LocalPlannerApplication {
+    static func main() {
+        let application = NSApplication.shared
+        let delegate = AppDelegate()
+        application.setActivationPolicy(.regular)
+        application.delegate = delegate
+        withExtendedLifetime(delegate) { application.run() }
+    }
+}
