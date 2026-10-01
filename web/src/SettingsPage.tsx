@@ -7,6 +7,7 @@ import { notifySettingsChange } from "./desktop";
 import { navigate } from "./route";
 import { parseSendShortcut } from "./composerKeyboard";
 import { useSendShortcut } from "./useSendShortcut";
+import { useAssistantPreferences } from "./useAssistantPreferences";
 
 const BACKUP_LABELS: Record<string, string> = { auto: "自动备份", manual: "手动备份", "before-restore": "恢复前备份", imported: "导入的备份", migration: "升级前备份" };
 const SECTIONS = [
@@ -27,6 +28,7 @@ export function SettingsPage({ onClose }: { onClose?: () => void }) {
   const contentRef = useRef<HTMLDivElement>(null);
   const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const { shortcut, choose: chooseShortcut, modifierLabel, newlineLabel } = useSendShortcut();
+  const { showProcess, choose: chooseProcess } = useAssistantPreferences();
   const [backups, setBackups] = useState<Backup[]>([]);
   const [items, setItems] = useState<Launcher[]>([]);
   const [selected, setSelected] = useState("");
@@ -194,6 +196,8 @@ export function SettingsPage({ onClose }: { onClose?: () => void }) {
 
         <section className="settings-section" {...panelProps("assistant")}>
           <p className="muted">用一句话添加、改期、补充备注或整理顺序。</p>
+          <label className="assistant-process-setting"><input type="checkbox" checked={showProcess} onChange={(event) => chooseProcess(event.target.checked)} />看模型操作过程</label>
+          <p className="settings-caption">{showProcess ? "实时显示步骤说明和操作摘要，详情按需展开。" : "只看结果（推荐）"} 随时切换，普通操作和规划草案都适用。</p>
           <details className="settings-details"><summary>助手可以帮我做什么？</summary><AssistantUsage /></details>
           <div className="settings-actions">
             <select aria-label="配置哪个助手" value={selected} disabled={busy || !items.length} onChange={(event) => choose(event.target.value)}>

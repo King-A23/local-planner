@@ -3378,3 +3378,17 @@ select:focus-visible {
 .planning-draft-change-details summary { cursor: pointer; padding: .3rem 0; }
 .planning-draft-changes { max-height: 12rem; overflow-y: auto; }
 .roadmap-heading h1, .roadmap-heading h2 { overflow-wrap: anywhere; }
+
+.assistant-process-setting { display: flex; align-items: center; gap: .6rem; cursor: pointer; }
+.assistant-process-setting input { width: auto; accent-color: var(--color-primary); }
+.agent-process { width: 100%; padding: .8rem 1rem; border: 1px solid var(--color-border-subtle); border-radius: 14px; background: var(--surface-raised); color: var(--color-page-ink); pointer-events: auto; box-shadow: var(--color-shadow-popover); }
+.agent-process-heading { font-size: .82rem; font-weight: 600; cursor: pointer; }
+.agent-process[open] > .agent-process-heading { margin-bottom: .5rem; }
+.agent-process-list { max-height: min(28vh, 250px); overflow: auto; overscroll-behavior: contain; }
+.agent-process-item { padding: .4rem 0; font-size: .8rem; overflow-wrap: anywhere; white-space: pre-wrap; }
+.agent-process-item + .agent-process-item { border-top: 1px solid var(--color-border-subtle); }
+.agent-process-summary { display: flex; justify-content: space-between; gap: .8rem; }
+.agent-process-summary small { flex-shrink: 0; color: var(--color-muted); }
+.agent-process-item summary { color: var(--color-muted); cursor: pointer; margin-top: .2rem; }
+.agent-process-item pre { font-size: .72rem; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 10rem; overflow: auto; }
+.agent-run-controls:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 3px; border-radius: 6px; }

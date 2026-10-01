@@ -8,6 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     private var settingsWindow: NSWindow?
     private var settingsWebView: WKWebView?
     private var pendingSettingsFragment: String?
+    private var pendingAssistantOpen = false
     private var entryPanel: NSPanel?
     private var entryTitle: NSTextField?
     private var entryDestination: NSSegmentedControl?
@@ -124,6 +125,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         }
         let view = menu("显示")
         add(view, "搜索事项…", #selector(searchItems), "k", target: self)
+        let assistantItem = NSMenuItem(title: "打开计划助手", action: #selector(openAssistant), keyEquivalent: "l")
+        assistantItem.keyEquivalentModifierMask = [.command, .shift]
+        assistantItem.target = self
+        view.addItem(assistantItem)
         add(view, "今天", #selector(goToday), "1", target: self)
         add(view, "待办", #selector(goInventory), "2", target: self)
         add(view, "定期事项", #selector(goRecurrences), "3", target: self)
@@ -225,8 +230,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         configuration.userContentController.add(self, name: "plannerDesktop")
         let savedTheme = UserDefaults.standard.string(forKey: themePreferenceKey)
         let themeValue = savedTheme.flatMap { themeIds.contains($0) ? "'\($0)'" : nil } ?? "null"
+        let processValue = UserDefaults.standard.bool(forKey: "assistantShowProcess") ? "true" : "false"
         configuration.userContentController.addUserScript(WKUserScript(
-            source: "window.__PLANNER_DESKTOP_WINDOW__ = '\(kind)'; window.__PLANNER_DESKTOP_THEME__ = \(themeValue);",
+            source: "window.__PLANNER_DESKTOP_WINDOW__ = '\(kind)'; window.__PLANNER_DESKTOP_THEME__ = \(themeValue); window.__PLANNER_DESKTOP_ASSISTANT_PROCESS__ = \(processValue);",
             injectionTime: .atDocumentStart, forMainFrameOnly: true))
         let view = WKWebView(frame: frame, configuration: configuration)
         view.navigationDelegate = self
@@ -270,6 +276,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        if webView === self.webView && pendingAssistantOpen {
+            pendingAssistantOpen = false
+            openAssistant()
+        }
         if webView === settingsWebView, let fragment = pendingSettingsFragment {
             pendingSettingsFragment = nil
             revealSettingsSection(fragment)
@@ -290,18 +300,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             sendShortcutState(to: source)
         case "setQuickShortcut":
             if let value = body["value"] as? String { configureShortcut(value); sendShortcutState(to: source) }
+        case "getAssistantPreferences":
+            let value = UserDefaults.standard.bool(forKey: "assistantShowProcess") ? "true" : "false"
+            source.evaluateJavaScript("window.__PLANNER_DESKTOP_ASSISTANT_PROCESS__ = \(value); window.dispatchEvent(new CustomEvent('planner:assistant-preferences-changed', {detail: '\(value)'}))")
         case "setTheme":
             if let value = body["value"] as? String, themeIds.contains(value) {
                 UserDefaults.standard.set(value, forKey: themePreferenceKey)
             }
         case "settingsChanged":
             guard let event = body["event"] as? String,
-                  ["planner:restored", "planner:launchers-changed", "planner:theme-changed", "planner:shortcuts-changed"].contains(event),
+                  ["planner:restored", "planner:launchers-changed", "planner:theme-changed", "planner:shortcuts-changed", "planner:assistant-preferences-changed"].contains(event),
                   let data = try? JSONSerialization.data(withJSONObject: body),
                   let json = String(data: data, encoding: .utf8) else { return }
             if event == "planner:theme-changed" {
                 guard let value = body["detail"] as? String, themeIds.contains(value) else { return }
                 UserDefaults.standard.set(value, forKey: themePreferenceKey)
+            }
+            if event == "planner:assistant-preferences-changed" {
+                guard let value = body["detail"] as? String, ["true", "false"].contains(value) else { return }
+                UserDefaults.standard.set(value == "true", forKey: "assistantShowProcess")
             }
             let other = source === settingsWebView ? webView : settingsWebView
             other?.evaluateJavaScript("{ const message = \(json); window.dispatchEvent(new CustomEvent(message.event, {detail: message.detail})); }")
@@ -621,6 +638,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     @objc private func searchItems() {
         window?.makeKeyAndOrderFront(nil)
         webView?.evaluateJavaScript("window.dispatchEvent(new Event('planner:search'))")
+    }
+
+    @objc private func openAssistant() {
+        guard !quitting, !failed, baseURL != nil, NSApp.modalWindow == nil,
+              !NSApp.windows.contains(where: { $0.attachedSheet != nil }) else { return }
+        if let input = NSApp.keyWindow?.firstResponder as? NSTextInputClient, input.hasMarkedText() { return }
+        // Query before raising the main window so web dialogs do not lose focus.
+        activeWebView?.evaluateJavaScript("Boolean(document.querySelector('dialog[open]'))") { [weak self] value, error in
+            guard let self, error == nil, (value as? Bool) != true else { return }
+            self.window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            if self.webView.isLoading { self.pendingAssistantOpen = true }
+            else { self.webView.evaluateJavaScript("window.dispatchEvent(new Event('planner:open-assistant'))") }
+        }
     }
     @objc private func goToday() { navigate("") }
     @objc private func goInventory() { navigate("inventory") }

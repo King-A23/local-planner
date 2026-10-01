@@ -6,6 +6,8 @@ import { useAutoGrowingComposer } from "./useAutoGrowingComposer";
 import { ComposerKeyboard } from "./composerKeyboard";
 import { useSendShortcut } from "./useSendShortcut";
 import { ASSISTANT_EXAMPLES } from "./assistantExamples";
+import { useAssistantPreferences } from "./useAssistantPreferences";
+import { AgentProcess } from "./AgentProcess";
 
 type Launcher = { id: string; name: string; command: string };
 type Receipt = {
@@ -41,7 +43,8 @@ async function request<T>(url: string, body?: unknown): Promise<T> {
   return data as T;
 }
 
-export function AgentPanel({ open, onClose, onOpen, triggerRef, surface, date, goalId, recoveryGeneration, contextReady, onRan, onStatusChange, mode = "execution", draftId = null, selectedPhaseId = null, expectedDraftRevision = null }: {
+export function AgentPanel({ open, focusRequest = 0, onClose, onOpen, triggerRef, surface, date, goalId, recoveryGeneration, contextReady, onRan, onStatusChange, mode = "execution", draftId = null, selectedPhaseId = null, expectedDraftRevision = null }: {
+  focusRequest?: number;
   open: boolean; onClose: () => void; onOpen?: () => void; triggerRef: RefObject<HTMLElement | null>;
   surface: "today" | "todo" | "day" | "goals" | "goal"; date: string | null; goalId: string | null; recoveryGeneration: string | null; contextReady: boolean; onRan?: () => void; onStatusChange?: (status: string | null) => void;
   mode?: "execution" | "planning"; draftId?: string | null; selectedPhaseId?: string | null; expectedDraftRevision?: number | null;
@@ -64,6 +67,8 @@ export function AgentPanel({ open, onClose, onOpen, triggerRef, surface, date, g
   const composerRef = useRef<HTMLFormElement>(null);
   const keyboard = useRef(new ComposerKeyboard());
   const { shortcut, sendLabel } = useSendShortcut();
+  const { showProcess } = useAssistantPreferences();
+  const controlsRef = useRef<HTMLDivElement>(null);
   const actionRef = useRef(false);
   const requestRef = useRef<{ key: string; id: string } | null>(null);
   const notifiedRef = useRef("");
@@ -108,6 +113,11 @@ export function AgentPanel({ open, onClose, onOpen, triggerRef, surface, date, g
   useEffect(() => { onStatusChange?.(active && run ? run.status : null); }, [active, run?.status, onStatusChange]);
   useEffect(() => { savePreference(draftKey, prompt); }, [draftKey, prompt]);
   useEffect(() => { setPrompt(readPreference(draftKey)); }, [draftKey]);
+  // A refreshed/new window may not have a local draft for the shared live run.
+  // Hydrate once per run/context; clearing a paused instruction remains editable.
+  useEffect(() => {
+    if (run && ACTIVE.has(run.status)) setPrompt((current) => current.trim() ? current : run.prompt);
+  }, [run?.id, draftKey]);
   useEffect(() => { setShowMenu(false); }, [mode]);
   useEffect(() => { savePreference(SELECTION_KEY, selected); }, [selected]);
   useEffect(() => {
@@ -134,8 +144,10 @@ export function AgentPanel({ open, onClose, onOpen, triggerRef, surface, date, g
     return () => window.removeEventListener("planner:planning-draft-updated", refresh);
   }, [mode, draftId]);
   useEffect(() => {
-    if (open) promptRef.current?.focus();
-  }, [open]);
+    if (!open) return;
+    if (promptRef.current?.disabled) controlsRef.current?.focus();
+    else promptRef.current?.focus();
+  }, [open, focusRequest]);
   useEffect(() => {
     let stopped = false;
     let timer: number;
@@ -295,7 +307,7 @@ export function AgentPanel({ open, onClose, onOpen, triggerRef, surface, date, g
           </div>
           {active ? <>
             <p className="agent-run-prompt">{run.prompt}</p>
-            <div className="agent-run-controls">
+            <div className="agent-run-controls" ref={controlsRef} tabIndex={-1} role="group" aria-label="助手运行控制">
               {run.status === "running" && <button type="button" disabled={pending || !synced} onClick={() => control("pause")}>暂停</button>}
               {paused && <button type="button" disabled={pending || !synced || !prompt.trim()} onClick={() => edited ? continueWithChanges() : control("resume")}>{edited ? "按新指令继续" : "继续执行"}</button>}
               <button type="button" className="linkish quiet" disabled={pending || !synced || run.status === "stopping"} onClick={() => control("stop")}>停止本次</button>
@@ -309,6 +321,7 @@ export function AgentPanel({ open, onClose, onOpen, triggerRef, surface, date, g
             {!result?.ok && <button type="button" className="linkish" onClick={() => { setPrompt(run.prompt); promptRef.current?.focus(); }}>编辑指令后重试</button>}
           </>}
         </div>}
+        {open && showProcess && run && (active || receiptMatchesContext) && <AgentProcess key={run.id} runId={run.id} active={active} />}
         {mode !== "planning" && showMenu && <div className="agent-plus-menu">
           <div className="agent-plus-menu-header">试着这样说</div>
           {ASSISTANT_EXAMPLES.map((example) => <button key={example} type="button" className="agent-plus-menu-item" onClick={() => { setPrompt(example); setShowMenu(false); promptRef.current?.focus(); }}>{example}</button>)}

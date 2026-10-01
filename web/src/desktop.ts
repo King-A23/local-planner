@@ -1,9 +1,10 @@
-type SettingsEvent = "planner:launchers-changed" | "planner:restored" | "planner:theme-changed" | "planner:shortcuts-changed";
+type SettingsEvent = "planner:launchers-changed" | "planner:restored" | "planner:theme-changed" | "planner:shortcuts-changed" | "planner:assistant-preferences-changed";
 
 declare global {
   interface Window {
     __PLANNER_DESKTOP_WINDOW__?: "main" | "settings";
     __PLANNER_DESKTOP_THEME__?: string | null;
+    __PLANNER_DESKTOP_ASSISTANT_PROCESS__?: boolean;
     webkit?: { messageHandlers?: { plannerDesktop?: { postMessage: (message: unknown) => void } } };
   }
 }

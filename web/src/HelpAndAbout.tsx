@@ -5,6 +5,7 @@ import { ASSISTANT_EXAMPLES } from "./assistantExamples";
 
 export function CommonShortcuts({ className = "settings-keyboard-list" }: { className?: string }) {
   return <dl className={className}>
+    <div><dt>打开计划助手</dt><dd><kbd>⌘ / Ctrl + Shift + L</kbd></dd></div>
     <div><dt>搜索事项</dt><dd><kbd>⌘ / Ctrl + K</kbd></dd></div>
     <div><dt>保存标题和备注</dt><dd><kbd>⌘ / Ctrl + Enter</kbd></dd></div>
     <div><dt>调整顺序（聚焦拖动柄）</dt><dd><kbd>⌥ / Alt + ↑ ↓</kbd></dd></div>
@@ -68,6 +69,7 @@ export function UsageGuide() {
 
     <details className="settings-details"><summary>使用计划助手</summary>
       <p>先在「计划助手」分区连接工具并检测环境，再打开主界面右上角的「计划助手」输入指令。</p>
+      <p>按 ⌘ / Ctrl + Shift + L 打开并聚焦输入框，再次按下回到输入框，Esc 收起。默认只看结果；在设置「计划助手」开启「看模型操作过程」，可实时查看公开的步骤说明与工具操作，命令和输出按需展开。</p>
       <AssistantUsage />
       <dl>
         <dt>暂停，再继续</dt><dd>点击「暂停」挂起本机执行。不改指令，点「继续执行」可从暂停处继续；远端请求可能仍在执行。</dd>

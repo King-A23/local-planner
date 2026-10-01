@@ -1094,6 +1094,10 @@ def create_app(
     def get_agent(run_id: str) -> dict[str, Any]:
         return runs.get(run_id)
 
+    @app.get("/api/agent-runs/{run_id}/events")
+    def get_agent_events(run_id: str, after: int = Query(default=0, ge=0)) -> dict[str, Any]:
+        return runs.events(run_id, after)
+
     @app.post("/api/agent-runs/{run_id}/{action}")
     def control_agent(run_id: str, action: Literal["pause", "resume", "stop"]) -> dict[str, Any]:
         return runs.control(run_id, action)

@@ -12,6 +12,8 @@ import sys
 import tempfile
 import time
 import uuid
+import codecs
+import selectors
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
@@ -26,6 +28,7 @@ from local_planner.paths import DB_NAME, data_dir, resolve_clock
 from local_planner.present import context_payload
 from local_planner.processes import agent_process
 from local_planner.runtime import exclusive_uow, planner_txn
+from local_planner.agent_events import PublicEvents, structured_command
 
 LAUNCHERS_NAME = "launchers.json"
 DEFAULT_OPENCODE = {
@@ -49,6 +52,7 @@ PRESET_INSTRUCTIONS = """你在通过 Local Planner 的 CLI（python -m local_pl
 - 格式错误时根据错误或对应命令的 --help 修正一次；同一错误再次出现就停止并说明已完成和未完成的部分，不要不断重试、echo 测试或重复调用无关工具。
 - 全部写入后只读取一次目标日（库存或系列则读取对应列表），核对标题、日期和独立的开始/结束时刻。最终简短报告结果；不能把部分完成说成全部成功。
 - 最终回复使用界面中的普通用语（目标、当前阶段、下一步），不把 ID、revision、指针、幂等键或进程收尾标记写进用户回复。
+- 多步操作可在工具调用前提供一句简短的公开步骤说明，只描述即将做的操作，不输出内部推理。最终回复只报告结果或需要用户澄清的问题。
 
 时间：
 - 用户只说几点开始 → 只写 startClock，不要写 endClock。
@@ -239,6 +243,7 @@ document 仅包含 goals。每个目标可包含 id、title、notes、horizonTex
 新条目的最小形状示例（UUID 用实际新 UUID 替换）：
 {{"id":"UUID","title":"目标","notes":"","horizonText":"","parentGoalId":null,"state":"active","endReason":null,"nextTaskId":null,"nextActionId":null,"focusPhaseId":null,"revision":0,"phases":[{{"id":"UUID","goalId":"目标 UUID","title":"阶段","notes":"","position":0,"status":"open","outcome":"","horizonText":""}}],"actions":[{{"id":"UUID","goalId":"目标 UUID","phaseId":"阶段 UUID","title":"第一步","notes":"","position":0,"taskId":null,"scheduledDate":null,"completed":false,"discarded":false}}]}}
 JSON 之外的解释可输出到终端，但结果文件必须可被 JSON 严格解析。
+可在工具调用前用一句话说明即将做的操作，不输出内部推理。最终回复只说明草案的内容和是否需要澄清，不展示工作目录、结果文件路径、内部 ID 或进程收尾标记；宿主会核对草案并提示用户保存。
 
 用户原话：
 {user_text.strip()}
@@ -428,6 +433,7 @@ def run_launcher(
         )
         try:
             argv = expand_command(launcher.command, composed, context_file, root)
+            argv, source = structured_command(argv)
         except ValueError as exc:
             return RunResult(
                 ok=False,
@@ -457,7 +463,7 @@ def run_launcher(
                 if control:
                     control.attach(process)
                 try:
-                    return _collect_result(process, argv, launcher, timeout, control)
+                    return _collect_result(process, argv, launcher, timeout, control, source)
                 finally:
                     if control:
                         control.detach()
@@ -511,6 +517,7 @@ def run_planning_launcher(
         )
         try:
             argv = expand_command(launcher.command, composed, context_file, isolated_root)
+            argv, source = structured_command(argv)
         except ValueError as exc:
             return RunResult(False, [], None, "", str(exc)), None
         # Some existing local Codex launchers pin --cd to a previous QA
@@ -543,7 +550,7 @@ def run_planning_launcher(
                 if control:
                     control.attach(process)
                 try:
-                    result = _collect_result(process, argv, launcher, timeout, control)
+                    result = _collect_result(process, argv, launcher, timeout, control, source)
                 finally:
                     if control:
                         control.detach()
@@ -563,56 +570,75 @@ def run_planning_launcher(
             ), None
 
 
-def _collect_result(process, argv: list[str], launcher: Launcher, timeout: float, control: RunControl | None = None) -> RunResult:
+def _collect_result(process, argv: list[str], launcher: Launcher, timeout: float,
+                    control: RunControl | None = None, source: str = "none") -> RunResult:
+    """Drain both pipes concurrently without blocking process supervision."""
     deadline = time.monotonic() + timeout
     failure_reason = None
-    while True:
-        try:
-            stdout, stderr = process.communicate(
-                timeout=0.2 if control else max(0.001, min(1.0, deadline - time.monotonic()))
-            )
-            break
-        except subprocess.TimeoutExpired as exc:
-            # communicate's partial output is bytes even with text=True.
-            output = (exc.stdout or b"") + (exc.stderr or b"")
-            if output.count(b"tool was called with invalid arguments:") >= 3:
-                failure_reason = "工具参数格式反复出错（至少 3 次）：已停止执行。当前模型接入无法可靠调用工具，请检查接入配置或选择其他计划助手。"
-                break
-            if control and control.status == "paused":
-                continue
-            timed_out = control.elapsed() >= timeout if control else time.monotonic() >= deadline
-            if timed_out:
-                failure_reason = "timeout：执行超时，已停止本次进程及其子进程；可能已有部分修改，请核对计划后再重试。"
-                break
+    streams: dict[str, list[str]] = {"stdout": [], "stderr": []}
+    decoders = {name: codecs.getincrementaldecoder("utf-8")(errors="replace") for name in streams}
+    parser = PublicEvents(source, control.events if control else None)
+    invalid_tail = ""
+    invalid_count = 0
+    selector = selectors.DefaultSelector()
+    for name, pipe in [("stdout", process.stdout), ("stderr", process.stderr)]:
+        os.set_blocking(pipe.fileno(), False)
+        selector.register(pipe, selectors.EVENT_READ, name)
+    try:
+        while selector.get_map() or process.poll() is None:
+            for key, _ in selector.select(timeout=0.05):
+                name = key.data
+                try:
+                    data = os.read(key.fd, 65536)
+                except BlockingIOError:
+                    continue
+                if not data:
+                    selector.unregister(key.fileobj)
+                    text = decoders[name].decode(b"", final=True)
+                else:
+                    text = decoders[name].decode(data)
+                if name != "stdout" or source == "none":
+                    streams[name].append(text)
+                if name == "stdout":
+                    parser.feed(text, final=not data)
+                marker = "tool was called with invalid arguments:"
+                combined = invalid_tail + text
+                invalid_count += combined.count(marker)
+                invalid_tail = combined[-(len(marker) - 1):]
+            if failure_reason is None and process.poll() is None:
+                if invalid_count >= 3:
+                    failure_reason = "工具参数格式反复出错（至少 3 次）：已停止执行。当前模型接入无法可靠调用工具，请检查接入配置或选择其他计划助手。"
+                elif not (control and control.status == "paused"):
+                    timed_out = control.elapsed() >= timeout if control else time.monotonic() >= deadline
+                    if timed_out:
+                        failure_reason = "timeout：执行超时，已停止本次进程及其子进程；可能已有部分修改，请核对计划后再重试。"
+                if failure_reason:
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+            # A descendant may retain the pipes after the parent has exited.
+            if failure_reason is None and process.poll() is not None and selector.get_map():
+                if (control.elapsed() >= timeout if control else time.monotonic() >= deadline):
+                    failure_reason = "timeout：执行超时，已停止本次进程及其子进程；可能已有部分修改，请核对计划后再重试。"
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+        process.wait()
+    finally:
+        selector.close()
+        process.stdout.close()
+        process.stderr.close()
+    stdout = "".join(streams["stdout"]) if source == "none" else parser.reply
+    stderr = "".join(streams["stderr"])
+    if parser.error:
+        stderr += "\n" + parser.error
     if failure_reason:
-        # Kill the whole owned group: descendants may hold stdout/stderr open.
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        stdout, stderr = process.communicate()
+        stderr += "\n" + failure_reason
         logger.warning("launcher name=%s stopped: %s", launcher.name, failure_reason)
-        return RunResult(
-            ok=False,
-            argv=argv,
-            returncode=None,
-            stdout=stdout,
-            stderr=stderr + "\n" + failure_reason,
-        )
-    logger.info(
-        "launcher name=%s ok=%s returncode=%s",
-        launcher.name,
-        process.returncode == 0,
-        process.returncode,
-    )
-    if stdout:
-        logger.debug("launcher stdout=%s", stdout)
-    if stderr:
-        logger.debug("launcher stderr=%s", stderr)
-    return RunResult(
-        ok=process.returncode == 0,
-        argv=argv,
-        returncode=process.returncode,
-        stdout=stdout,
-        stderr=stderr,
-    )
+    logger.info("launcher name=%s ok=%s returncode=%s", launcher.name,
+                process.returncode == 0 and not failure_reason, process.returncode)
+    return RunResult(ok=process.returncode == 0 and not failure_reason and not parser.failed,
+                     argv=argv, returncode=None if failure_reason else process.returncode,
+                     stdout=stdout, stderr=stderr)

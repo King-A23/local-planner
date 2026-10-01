@@ -15,6 +15,7 @@ import { handleNavClick, navigate, parseRoute } from "./route";
 import { Shell } from "./Shell";
 import { SettingsPage } from "./SettingsPage";
 import { UndoToast } from "./UndoToast";
+import { matchesAssistantShortcut } from "./assistantKeyboard";
 
 function useLocation(): { pathname: string; search: string } {
   const [location, setLocation] = useState(() => ({
@@ -41,6 +42,7 @@ export function App() {
     return new URLSearchParams(window.location.search).get("agent") === "1";
   });
   const [agentStatus, setAgentStatus] = useState<string | null>(null);
+  const [agentFocusRequest, setAgentFocusRequest] = useState(0);
   const [agentRunTick, setAgentRunTick] = useState(0);
   const [goalRecoveryGeneration, setGoalRecoveryGeneration] = useState<string | null>(null);
   const [goalContextReady, setGoalContextReady] = useState(false);
@@ -53,6 +55,37 @@ export function App() {
     agentTriggerRef.current = trigger;
     setAgentOpen((open) => !open);
   }, []);
+
+  useEffect(() => {
+    let composing = false;
+    const compositionStart = () => { composing = true; };
+    const compositionEnd = () => { composing = false; };
+    const open = () => {
+      if (composing || document.querySelector("dialog[open]")) return;
+      if (route.kind === "settings") navigate("/");
+      if (!agentOpen && document.activeElement instanceof HTMLElement) agentTriggerRef.current = document.activeElement;
+      setAgentOpen(true);
+      setAgentFocusRequest((value) => value + 1);
+    };
+    const key = (event: KeyboardEvent) => {
+      // The native menu owns this chord in WKWebView, avoiding double dispatch.
+      if (window.__PLANNER_DESKTOP_WINDOW__ || event.defaultPrevented || composing) return;
+      if (matchesAssistantShortcut(event, /Mac|iPhone|iPad/.test(navigator.platform))) {
+        if (document.querySelector("dialog[open]")) return;
+        event.preventDefault(); open();
+      }
+    };
+    window.addEventListener("compositionstart", compositionStart);
+    window.addEventListener("compositionend", compositionEnd);
+    window.addEventListener("keydown", key);
+    window.addEventListener("planner:open-assistant", open);
+    return () => {
+      window.removeEventListener("compositionstart", compositionStart);
+      window.removeEventListener("compositionend", compositionEnd);
+      window.removeEventListener("keydown", key);
+      window.removeEventListener("planner:open-assistant", open);
+    };
+  }, [agentOpen, route.kind]);
 
   const refreshMeta = useCallback(() => {
     getMeta()
@@ -320,6 +353,7 @@ export function App() {
       {searchOpen && <SearchDialog onClose={() => setSearchOpen(false)} />}
       <UndoToast onChanged={refreshAll} />
       <AgentPanel
+        focusRequest={agentFocusRequest}
         onStatusChange={setAgentStatus}
         open={agentOpen}
         onClose={() => setAgentOpen(false)}

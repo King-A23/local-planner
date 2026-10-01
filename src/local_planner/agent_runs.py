@@ -14,6 +14,7 @@ from typing import Any
 
 from local_planner.domain.errors import Conflict, NotFound
 from local_planner.runtime import LockTimeout, interprocess_lock
+from local_planner.agent_events import EventBuffer
 
 ACTIVE = {"starting", "running", "paused", "stopping"}
 
@@ -28,6 +29,7 @@ class RunControl:
         self.paused_at: float | None = None
         self.paused_seconds = 0.0
         self.finished_at: float | None = None
+        self.events = EventBuffer()
 
     def elapsed(self) -> float:
         with self.lock:
@@ -71,6 +73,7 @@ class RunControl:
                     self._signal(signal.SIGSTOP)
                     self.paused_at = time.monotonic()
                     self.status = "paused"
+                    self.events.emit("control", "status", "paused", "本机执行已暂停")
             except LockTimeout:
                 raise Conflict("正在保存计划，请稍后再暂停") from None
 
@@ -84,6 +87,7 @@ class RunControl:
             self.paused_seconds += time.monotonic() - (self.paused_at or time.monotonic())
             self.paused_at = None
             self.status = "running"
+            self.events.emit("control", "status", "running", "继续本机执行")
 
     def stop(self) -> None:
         with self.lock:
@@ -93,6 +97,7 @@ class RunControl:
             self.status = "stopping"
             # SIGKILL also terminates stopped groups; no transient resumed writes.
             self._signal(signal.SIGKILL)
+            self.events.emit("control", "status", "stopping", "正在停止本次执行")
 
     def finish(self, status: str) -> None:
         with self.lock:
@@ -100,6 +105,7 @@ class RunControl:
             self.paused_at = None
             self.status = status
             self.process = None
+            self.events.emit("control", "status", status, "本次执行已结束")
 
 
 class AgentRuns:
@@ -208,6 +214,13 @@ class AgentRuns:
             else:
                 control.stop()
             return self._payload(run)
+
+    def events(self, run_id: str, after: int) -> dict:
+        with self.lock:
+            run = self.runs.get(run_id)
+            if run is None:
+                raise NotFound("找不到这次执行；应用可能已重新启动")
+            return run["control"].events.payload(after)
 
     def close(self) -> None:
         with self.lock:

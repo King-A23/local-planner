@@ -73,7 +73,7 @@ export function Shell({
             className={`nav-agent ${agentOpen ? "active" : ""}`}
             aria-expanded={agentOpen}
             aria-controls="agent-panel"
-            title={agentOpen ? "收起计划助手" : "打开计划助手"}
+            title={agentOpen ? "收起计划助手（Esc）；聚焦：⌘ / Ctrl + Shift + L" : "打开计划助手（⌘ / Ctrl + Shift + L）"}
             onClick={(event) => onOpenAgent(event.currentTarget)}
           >
             <span className="agent-nav-sparkle">✨</span>

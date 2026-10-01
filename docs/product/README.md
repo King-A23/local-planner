@@ -24,3 +24,6 @@
 - [日常体验打磨与助手执行控制](daily-experience.md)
 
 - [第一批用户的使用体验](first-users.md)
+
+- [计划助手快捷键与操作过程](assistant-progress.md)
+- [计划助手快捷键与操作过程验收](assistant-progress-validation.md)
