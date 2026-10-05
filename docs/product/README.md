@@ -27,3 +27,6 @@
 
 - [计划助手快捷键与操作过程](assistant-progress.md)
 - [计划助手快捷键与操作过程验收](assistant-progress-validation.md)
+- [助手完成通知验收](agent-completion-notice-validation.md)
+- [规划当前重点与草案对照](planning-focus.md)
+- [规划当前重点与草案对照验收](planning-focus-validation.md)

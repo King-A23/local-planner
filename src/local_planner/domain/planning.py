@@ -77,10 +77,70 @@ def _changes(before, after):
     return rows
 
 
+_REVIEW_FIELDS = {
+    "goal": {"title": "名称", "notes": "备注", "horizonText": "大致时间", "parentGoalId": "支持目标",
+             "focusPhaseId": "当前阶段", "nextActionId": "下一步", "nextTaskId": "下一步任务"},
+    "phase": {"title": "名称", "outcome": "阶段成果", "notes": "备注", "horizonText": "大致时间",
+              "status": "阶段状态", "position": "阶段顺序"},
+    "action": {"title": "名称", "notes": "备注", "phaseId": "所属阶段", "position": "行动顺序"},
+}
+
+
+def _review_index(document):
+    return {
+        "goal": _index(document),
+        "phase": {p["id"]: p for g in document["goals"] for p in g.get("phases", [])},
+        "action": {a["id"]: a for g in document["goals"] for a in g.get("actions", [])},
+        "task": {a["taskId"]: a for g in document["goals"] for a in g.get("actions", []) if a.get("taskId")},
+    }
+
+
+def _review_fields(uow, change, before, after):
+    """Describe canonical draft differences; never trust an assistant's summary."""
+    kind = change["kind"]
+
+    references = {"parentGoalId": "goal", "focusPhaseId": "phase", "phaseId": "phase",
+                  "nextActionId": "action", "nextTaskId": "task"}
+
+    def text(document, field, value):
+        if value is None:
+            return ""
+        if field in references:
+            if item := document[references[field]].get(value):
+                return item["title"]
+            # A single-goal draft may reference an external parent goal.
+            if field == "parentGoalId" and (parent := uow.get_goal(value)):
+                return parent.title
+            return "原关联已不可用"
+        if field == "status":
+            return {"open": "未完成", "done": "已完成", "skipped": "已跳过"}.get(value, str(value))
+        if field == "position":
+            return str(value + 1)
+        return str(value)
+
+    old, new = before[kind].get(change["id"]), after[kind].get(change["id"])
+    fields = []
+    for field, label in _REVIEW_FIELDS[kind].items():
+        a, b = (old or {}).get(field), (new or {}).get(field)
+        if old is not None and new is not None and a == b:
+            continue
+        if (old is None or new is None) and a in (None, "") and b in (None, ""):
+            continue
+        old_text = text(before, field, a) if old is not None else None
+        new_text = text(after, field, b) if new is not None else None
+        if field in references and a != b and a is not None and b is not None and old_text == new_text:
+            new_text += "（另一项同名内容）"
+        fields.append({"field": field, "label": label, "before": old_text, "after": new_text})
+    return fields
+
+
 def get_draft(uow, draft_id):
     draft = _raw(uow, draft_id)
     public = {k: v for k, v in draft.items() if k not in {"history", "application", "runBaselineRevision"}}
     public["changes"] = _changes(draft["baseDocument"], draft["document"])
+    before, after = _review_index(draft["baseDocument"]), _review_index(draft["document"])
+    for change in public["changes"]:
+        change["fields"] = _review_fields(uow, change, before, after)
     public["canUndo"] = bool(draft["history"]) and draft["status"] == "editing" and draft["runStatus"] != "running"
     public["canRevert"] = bool(draft.get("application")) and draft["status"] == "applied" and uow.meta.get("latest_planning_save") == draft_id
     return public

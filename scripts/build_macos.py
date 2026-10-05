@@ -71,7 +71,8 @@ def main() -> None:
     shutil.copytree(BUILD / "backend-dist/local-planner-backend", resources / "backend", symlinks=True)
     run("xcrun", "swiftc", "-swift-version", "5", "-O", "-target",
         f"{platform.machine()}-apple-macosx13.0", "-framework", "AppKit", "-framework", "WebKit",
-        SOURCE / "LocalPlanner.swift", SOURCE / "NavigationFailure.swift", "-o", macos / "LocalPlanner")
+        SOURCE / "LocalPlanner.swift", SOURCE / "NavigationFailure.swift", SOURCE / "AgentCompletionMonitor.swift",
+        "-o", macos / "LocalPlanner")
     run("xcrun", "swiftc", SOURCE / "MakeIcon.swift", "-o", BUILD / "make-icon")
     run(BUILD / "make-icon", BUILD / "AppIcon.iconset")
     run("iconutil", "-c", "icns", BUILD / "AppIcon.iconset", "-o", resources / "AppIcon.icns")

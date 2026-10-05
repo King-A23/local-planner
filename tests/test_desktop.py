@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import select
+import shlex
 import socket
 import shutil
 import subprocess
@@ -62,6 +64,67 @@ def desktop_server(root: Path, port: int = 0):
                 process.kill()
                 process.wait(timeout=3)
                 pytest.fail("desktop backend survived parent pipe closure")
+
+
+@pytest.fixture
+def native_completion_executable(tmp_path):
+    if sys.platform != "darwin" or not shutil.which("xcrun"):
+        pytest.skip("requires the macOS Swift compiler")
+    root = Path(__file__).resolve().parents[1]
+    executable = tmp_path / "agent-completion-checks"
+    subprocess.run(
+        ["xcrun", "swiftc", "-swift-version", "5", "-framework", "AppKit",
+         str(root / "desktop/macos/AgentCompletionMonitor.swift"),
+         str(root / "tests/desktop/agent_completion_checks.swift"), "-o", str(executable)],
+        capture_output=True, text=True, check=True, timeout=60,
+    )
+    return executable
+
+
+def test_native_completion_badge_and_background_monitor(native_completion_executable):
+    result = subprocess.run([str(native_completion_executable)], capture_output=True, text=True, check=True, timeout=10)
+    assert "27 native completion checks passed" in result.stdout
+
+
+@pytest.mark.parametrize("mode", ["execution", "planning"])
+def test_native_background_badge_reads_real_backend(tmp_path, native_completion_executable, mode):
+    script = tmp_path / "controlled-agent.py"
+    script.write_text('''import time, os, json
+from pathlib import Path
+time.sleep(.2)
+if "LOCAL_PLANNER_PLAN_RESULT_FILE" in os.environ:
+    Path(os.environ["LOCAL_PLANNER_PLAN_RESULT_FILE"]).write_text(json.dumps({"document": {"goals": []}, "message": "草案完成"}))
+print("done")
+''')
+    with desktop_server(tmp_path) as (_, url):
+        monitor = subprocess.Popen([str(native_completion_executable), url], stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, text=True)
+        try:
+            assert select.select([monitor.stdout], [], [], 5)[0], "native monitor did not initialize"
+            assert monitor.stdout.readline().strip() == "MONITOR_READY"
+            with httpx.Client(base_url=url, trust_env=False, headers={"Origin": url.rstrip("/")}) as client:
+                launcher = client.post("api/launchers", json={"name": "controlled fixture",
+                    "command": shlex.join([sys.executable, str(script)])})
+                assert launcher.status_code == 200, launcher.text
+                body = {"launcherId": launcher.json()["id"], "requestId": "native-badge-run", "prompt": "isolated test"}
+                if mode == "planning":
+                    draft_response = client.post("api/planning/drafts", json={
+                        "requestId": "native-badge-draft", "recoveryGeneration": None,
+                    })
+                    assert draft_response.status_code == 200, draft_response.text
+                    draft = draft_response.json()
+                    body.update(mode=mode, surface="goals", draftId=draft["id"], expectedDraftRevision=draft["revision"])
+                run = client.post("api/agent-runs", json=body)
+                assert run.status_code == 202, run.text
+                stdout, stderr = monitor.communicate(timeout=8)
+                assert monitor.returncode == 0, stderr
+                assert "REAL_BACKEND_DOCK_BADGE_1" in stdout
+                result = client.get(f"api/agent-runs/{run.json()['id']}").json()
+                assert result["status"] == "succeeded" and result["result"] is not None
+        finally:
+            if monitor.poll() is None:
+                monitor.terminate()
+                monitor.wait(timeout=3)
 
 
 def test_real_desktop_serves_spa_shares_cli_data_and_exits_on_parent_eof(tmp_path):

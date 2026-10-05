@@ -5,6 +5,7 @@ declare global {
     __PLANNER_DESKTOP_WINDOW__?: "main" | "settings";
     __PLANNER_DESKTOP_THEME__?: string | null;
     __PLANNER_DESKTOP_ASSISTANT_PROCESS__?: boolean;
+    __PLANNER_DESKTOP_PLANNING_FOCUS__?: string[];
     webkit?: { messageHandlers?: { plannerDesktop?: { postMessage: (message: unknown) => void } } };
   }
 }

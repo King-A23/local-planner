@@ -8,6 +8,7 @@ import { useSendShortcut } from "./useSendShortcut";
 import { ASSISTANT_EXAMPLES } from "./assistantExamples";
 import { useAssistantPreferences } from "./useAssistantPreferences";
 import { AgentProcess } from "./AgentProcess";
+import { AgentCompletionObserver } from "./agentCompletion";
 
 type Launcher = { id: string; name: string; command: string };
 type Receipt = {
@@ -72,6 +73,7 @@ export function AgentPanel({ open, focusRequest = 0, onClose, onOpen, triggerRef
   const actionRef = useRef(false);
   const requestRef = useRef<{ key: string; id: string } | null>(null);
   const notifiedRef = useRef("");
+  const completionObserver = useRef(new AgentCompletionObserver());
   const draftRunRef = useRef("");
   const onRanRef = useRef(onRan);
   const planningTargetRef = useRef({ mode, draftId });
@@ -83,6 +85,11 @@ export function AgentPanel({ open, focusRequest = 0, onClose, onOpen, triggerRef
   const blocked = environment && ["missing", "invalid", "login_required"].includes(environment.status);
   const currentPlanningRevision = planningDraft?.id === draftId ? planningDraft.revision : expectedDraftRevision;
   useAutoGrowingComposer(composerRef, promptRef);
+
+  function observeCompletion(next: Run | null) {
+    const notice = completionObserver.current.observe(next);
+    if (notice) window.dispatchEvent(new CustomEvent("planner:agent-completed", { detail: notice }));
+  }
 
   useEffect(() => {
     if (!open || !selected || active) return;
@@ -161,6 +168,7 @@ export function AgentPanel({ open, focusRequest = 0, onClose, onOpen, triggerRef
         const { run: latest } = await request<{ run: Run | null }>("/api/agent-runs");
         if (stopped) return;
         setRun(latest);
+        observeCompletion(latest);
         const target = planningTargetRef.current;
         // The persisted draft may be newer than the last run result (manual
         // edits, undo, or save). Never replay an old result into current state.
@@ -231,6 +239,7 @@ export function AgentPanel({ open, focusRequest = 0, onClose, onOpen, triggerRef
       launcherId, requestId: requestRef.current.id, prompt: text, ...context,
     });
     setRun(next);
+    observeCompletion(next);
     setDismissed(null);
     requestRef.current = null;
     setShowMenu(false);
@@ -243,6 +252,7 @@ export function AgentPanel({ open, focusRequest = 0, onClose, onOpen, triggerRef
     void perform(async () => {
       const next = await request<Run>(`/api/agent-runs/${run.id}/${action}`, {});
       setRun(next);
+      observeCompletion(next);
       setDismissed(null);
       if (action === "pause") {
         setPrompt(run.prompt);
@@ -259,6 +269,7 @@ export function AgentPanel({ open, focusRequest = 0, onClose, onOpen, triggerRef
       for (let attempt = 0; attempt < 100; attempt++) {
         const next = await request<Run>(`/api/agent-runs/${run.id}`);
         setRun(next);
+        observeCompletion(next);
         if (!ACTIVE.has(next.status)) { finished = next; break; }
         await new Promise((resolve) => window.setTimeout(resolve, 200));
       }

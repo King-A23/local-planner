@@ -2,7 +2,7 @@ import AppKit
 import WebKit
 import Carbon
 
-final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate, WKScriptMessageHandler, NSTextFieldDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate, WKScriptMessageHandler, NSTextFieldDelegate {
     private var window: NSWindow!
     private var webView: WKWebView!
     private var settingsWindow: NSWindow?
@@ -25,11 +25,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     private var output: Pipe?
     private var logFile: FileHandle?
     private var startupTimer: Timer?
+    private var completionMonitor: AgentCompletionMonitor?
     private var baseURL: URL?
     private var quitting = false
     private var failed = false
     private let themePreferenceKey = "plannerTheme"
     private let themeIds: Set<String> = ["warm-paper", "midnight", "nordic", "forest", "retro"]
+    private var planningFocusKey: String { "planningFocus:" + dataDirectory.standardizedFileURL.path }
+    private var planningFocusJSON: String {
+        let ids = UserDefaults.standard.stringArray(forKey: planningFocusKey) ?? []
+        guard let data = try? JSONSerialization.data(withJSONObject: ids), let json = String(data: data, encoding: .utf8) else { return "[]" }
+        return json
+    }
 
     private var dataDirectory: URL {
         if let path = ProcessInfo.processInfo.environment["LOCAL_PLANNER_DATA_DIR"] {
@@ -61,6 +68,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         window.title = "Local Planner"
         window.minSize = NSSize(width: 900, height: 620)
         window.isReleasedWhenClosed = false
+        window.delegate = self
         window.center()
         window.setFrameAutosaveName("LocalPlannerMainWindow")
         let loading = NSView()
@@ -217,6 +225,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
               let port = url.port, (1...65535).contains(port) else { return }
         startupTimer?.invalidate()
         baseURL = url
+        completionMonitor = AgentCompletionMonitor(baseURL: url, mainWindowReadable: { [weak self] in
+            self?.mainWindowReadable == true
+        }, updateBadge: { label in
+            NSApp.dockTile.badgeLabel = label
+        })
+        completionMonitor?.start()
         webView = makeWebView(frame: window.contentView!.bounds, kind: "main")
         webView.allowsBackForwardNavigationGestures = true
         window.contentView = webView
@@ -232,7 +246,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         let themeValue = savedTheme.flatMap { themeIds.contains($0) ? "'\($0)'" : nil } ?? "null"
         let processValue = UserDefaults.standard.bool(forKey: "assistantShowProcess") ? "true" : "false"
         configuration.userContentController.addUserScript(WKUserScript(
-            source: "window.__PLANNER_DESKTOP_WINDOW__ = '\(kind)'; window.__PLANNER_DESKTOP_THEME__ = \(themeValue); window.__PLANNER_DESKTOP_ASSISTANT_PROCESS__ = \(processValue);",
+            source: "window.__PLANNER_DESKTOP_WINDOW__ = '\(kind)'; window.__PLANNER_DESKTOP_THEME__ = \(themeValue); window.__PLANNER_DESKTOP_ASSISTANT_PROCESS__ = \(processValue); window.__PLANNER_DESKTOP_PLANNING_FOCUS__ = \(planningFocusJSON);",
             injectionTime: .atDocumentStart, forMainFrameOnly: true))
         let view = WKWebView(frame: frame, configuration: configuration)
         view.navigationDelegate = self
@@ -303,6 +317,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         case "getAssistantPreferences":
             let value = UserDefaults.standard.bool(forKey: "assistantShowProcess") ? "true" : "false"
             source.evaluateJavaScript("window.__PLANNER_DESKTOP_ASSISTANT_PROCESS__ = \(value); window.dispatchEvent(new CustomEvent('planner:assistant-preferences-changed', {detail: '\(value)'}))")
+        case "getPlanningFocus":
+            source.evaluateJavaScript("window.__PLANNER_DESKTOP_PLANNING_FOCUS__ = \(planningFocusJSON); window.dispatchEvent(new CustomEvent('planner:planning-focus-changed', {detail: \(planningFocusJSON)}))")
+        case "setPlanningFocus":
+            guard source === webView, let ids = body["goalIds"] as? [String], ids.count <= 100,
+                  ids.allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.count <= 100 }),
+                  Set(ids).count == ids.count else { return }
+            UserDefaults.standard.set(ids, forKey: planningFocusKey)
+            settingsWebView?.evaluateJavaScript("window.__PLANNER_DESKTOP_PLANNING_FOCUS__ = \(planningFocusJSON); window.dispatchEvent(new CustomEvent('planner:planning-focus-changed', {detail: \(planningFocusJSON)}))")
         case "setTheme":
             if let value = body["value"] as? String, themeIds.contains(value) {
                 UserDefaults.standard.set(value, forKey: themePreferenceKey)
@@ -320,6 +342,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
                 guard let value = body["detail"] as? String, ["true", "false"].contains(value) else { return }
                 UserDefaults.standard.set(value == "true", forKey: "assistantShowProcess")
             }
+            if event == "planner:restored" { completionMonitor?.reset() }
             let other = source === settingsWebView ? webView : settingsWebView
             other?.evaluateJavaScript("{ const message = \(json); window.dispatchEvent(new CustomEvent(message.event, {detail: message.detail})); }")
         default: break
@@ -444,6 +467,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
+    private var mainWindowReadable: Bool {
+        NSApp.isActive && window?.isKeyWindow == true && window?.isVisible == true &&
+        window?.isMiniaturized == false && window?.attachedSheet == nil && NSApp.modalWindow == nil
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) { completionMonitor?.acknowledge() }
+
+    func windowDidBecomeKey(_ notification: Notification) {
+        if notification.object as? NSWindow === window { completionMonitor?.acknowledge() }
+    }
+
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         window?.makeKeyAndOrderFront(nil)
         return true
@@ -455,6 +489,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         if let hotKey { UnregisterEventHotKey(hotKey) }
         if let hotKeyHandler { RemoveEventHandler(hotKeyHandler) }
         startupTimer?.invalidate()
+        completionMonitor?.stop()
+        NSApp.dockTile.badgeLabel = nil
         try? lifetime.fileHandleForWriting.close()
         guard let process = backend, process.isRunning else { return .terminateNow }
         // EOF triggers backend cleanup, including any agent process groups.

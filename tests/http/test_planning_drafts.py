@@ -68,6 +68,71 @@ def test_draft_preview_save_and_materialize_preserve_single_task(client, uow):
     assert uow.get_task(tid).current_scheduled_date == made["serverToday"]
 
 
+def test_review_shows_canonical_field_values_and_does_not_write_formal_plan(client, uow):
+    saved(client)
+    draft = create(client, goalId="csp")
+    edited = copy.deepcopy(draft["document"])
+    goal = edited["goals"][0]
+    goal["title"] = "新的方向"
+    goal["notes"] = "保留中文\n第二行说明"
+    goal["phases"][0]["outcome"] = "独立完成两道综合题"
+    goal["focusPhaseId"] = "simulation"
+    goal["nextActionId"] = "later-action"
+    updated = action(client, draft, "update", document=edited)
+    changes = {row["id"]: row for row in updated["changes"]}
+    fields = {row["field"]: row for row in changes["csp"]["fields"]}
+    assert fields["title"] == {"field": "title", "label": "名称", "before": "通过 CSP", "after": "新的方向"}
+    assert fields["notes"]["before"] == "" and fields["notes"]["after"] == "保留中文\n第二行说明"
+    assert fields["focusPhaseId"]["before"] == "补齐基础" and fields["focusPhaseId"]["after"] == "模拟训练"
+    assert fields["nextActionId"]["before"] == "完成第一套练习" and fields["nextActionId"]["after"] == "一次限时模拟"
+    assert changes["foundation"]["fields"] == [{
+        "field": "outcome", "label": "阶段成果", "before": "独立完成基础题", "after": "独立完成两道综合题",
+    }]
+    assert uow.get_goal("csp").title == "通过 CSP"
+    assert uow.get_phase("foundation").outcome == "独立完成基础题"
+    assert uow.list_goal_tasks("csp") == []
+    assert client.get(f"/api/planning/drafts/{updated['id']}").json()["changes"] == updated["changes"]
+    reverted = action(client, updated, "undo")
+    assert reverted["changes"] == []
+
+
+def test_review_add_remove_clear_reorder_and_external_parent(client, uow):
+    saved(client)
+    parent = client.post("/api/goals", json={"title": "外部方向", "requestId": "review-parent", "recoveryGeneration": None}).json()
+    draft = create(client, goalId="csp")
+    edited = copy.deepcopy(draft["document"])
+    goal = edited["goals"][0]
+    goal["parentGoalId"] = parent["id"]
+    goal["horizonText"] = ""
+    goal["phases"].reverse()
+    goal["actions"] = [goal["actions"][0], {"id": "review-new", "title": "新行动", "phaseId": "foundation", "notes": "<script>只是文字</script>"}]
+    updated = action(client, draft, "update", document=edited)
+    changes = {row["id"]: row for row in updated["changes"]}
+    fields = {row["field"]: row for row in changes["csp"]["fields"]}
+    assert fields["parentGoalId"]["before"] == "" and fields["parentGoalId"]["after"] == "外部方向"
+    assert fields["horizonText"]["before"] == "明年" and fields["horizonText"]["after"] == ""
+    assert changes["foundation"]["fields"] == [{"field": "position", "label": "阶段顺序", "before": "1", "after": "2"}]
+    assert all(row["before"] is None for row in changes["review-new"]["fields"])
+    assert all(row["after"] is None for row in changes["later-action"]["fields"])
+    assert uow.get_goal_action("review-new") is None
+
+
+def test_review_distinguishes_references_with_identical_names(client):
+    saved(client)
+    draft = create(client, goalId="csp")
+    document = copy.deepcopy(draft["document"])
+    document["goals"][0]["phases"][1]["title"] = document["goals"][0]["phases"][0]["title"]
+    changed = action(client, draft, "update", document=document)
+    action(client, changed, "apply")
+    draft = create(client, goalId="csp")
+    document = copy.deepcopy(draft["document"])
+    document["goals"][0]["focusPhaseId"] = "simulation"
+    updated = action(client, draft, "update", document=document)
+    field = next(f for c in updated["changes"] for f in c["fields"] if f["field"] == "focusPhaseId")
+    assert field["before"] == "补齐基础"
+    assert field["after"] == "补齐基础（另一项同名内容）"
+
+
 def test_persistent_draft_conversation_question_failure_stop_and_restart(client, uow, clock, tmp_path):
     draft = create(client)
     with uow.transaction():
@@ -249,7 +314,12 @@ def test_scoped_goal_removal_archives_and_preserves_formal_tasks_and_undo(client
     before_task = uow.get_task(task_id)
     before_phase = uow.get_phase('foundation')
     draft = action(client, create(client, goalId='csp'), 'update', document={'goals': []})
-    assert draft['changes'] == [{'kind': 'goal', 'id': 'csp', 'goalId': 'csp', 'type': 'removed', 'title': '通过 CSP'}]
+    assert [{k: v for k, v in row.items() if k != 'fields'} for row in draft['changes']] == [
+        {'kind': 'goal', 'id': 'csp', 'goalId': 'csp', 'type': 'removed', 'title': '通过 CSP'}]
+    assert {row['field']: row['before'] for row in draft['changes'][0]['fields']} == {
+        'title': '通过 CSP', 'horizonText': '明年', 'focusPhaseId': '补齐基础', 'nextTaskId': '完成第一套练习',
+    }
+    assert all(row['after'] is None for row in draft['changes'][0]['fields'])
     assert uow.get_goal('csp').state == 'active'
     applied = action(client, draft, 'apply')
     assert uow.get_goal('csp').state == 'ended'

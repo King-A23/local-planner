@@ -335,6 +335,11 @@ export function changeGoal(
 
 export type PlanningDraftStatus = "editing" | "applied" | "discarded";
 export type PlanningDocument = { goals: Array<Partial<Goal> & { id: string; phases?: GoalPhase[]; actions?: GoalAction[] }> };
+export type PlanningChange = {
+  kind: "goal" | "phase" | "action"; id: string; goalId: string;
+  type: "added" | "modified" | "removed"; title: string;
+  fields?: Array<{ field: string; label: string; before: string | null; after: string | null }>;
+};
 export type PlanningDraft = {
   id: string;
   scopeGoalId?: string | null;
@@ -346,7 +351,7 @@ export type PlanningDraft = {
   document: PlanningDocument;
   baseGoalRevisions: Record<string, number>;
   baseDocument?: PlanningDocument;
-  changes?: Array<{ kind: "goal" | "phase" | "action"; id: string; goalId: string; type: "added" | "modified" | "removed"; title: string }>;
+  changes?: PlanningChange[];
   canUndo?: boolean;
   canRevert?: boolean;
   runRequestId?: string | null;

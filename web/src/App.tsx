@@ -15,6 +15,7 @@ import { handleNavClick, navigate, parseRoute } from "./route";
 import { Shell } from "./Shell";
 import { SettingsPage } from "./SettingsPage";
 import { UndoToast } from "./UndoToast";
+import { AgentCompletionToast } from "./AgentCompletionToast";
 import { matchesAssistantShortcut } from "./assistantKeyboard";
 
 function useLocation(): { pathname: string; search: string } {
@@ -352,6 +353,7 @@ export function App() {
       <ItemEditorHost />
       {searchOpen && <SearchDialog onClose={() => setSearchOpen(false)} />}
       <UndoToast onChanged={refreshAll} />
+      <AgentCompletionToast />
       <AgentPanel
         focusRequest={agentFocusRequest}
         onStatusChange={setAgentStatus}

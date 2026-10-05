@@ -3244,6 +3244,12 @@ select:focus-visible {
 .undo-toast { position: fixed; z-index: 500; bottom: 1.5rem; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 1rem; padding: .8rem 1rem; max-width: min(620px, calc(100vw - 2rem)); background: var(--color-card-bg); border: 1px solid var(--color-border-default); border-radius: .7rem; box-shadow: var(--color-shadow-popover); }
 .undo-toast > span { font-size: .9rem; overflow-wrap: anywhere; max-height: 5rem; overflow: auto; }
 .undo-toast button { flex-shrink: 0; }
+.agent-completion-region { position: fixed; top: 1rem; right: 1rem; z-index: 500; width: min(360px, calc(100vw - 2rem)); }
+.agent-completion-toast { display: grid; grid-template-columns: auto 1fr auto; align-items: start; gap: .75rem; padding: .9rem 1rem; border: 1px solid var(--color-border-default); border-radius: 14px; background: var(--surface-raised); color: var(--color-page-ink); box-shadow: var(--color-shadow-popover); overflow-wrap: anywhere; }
+.agent-completion-toast strong { font-size: .88rem; }
+.agent-completion-toast p { font-size: .8rem; color: var(--color-muted); margin: .3rem 0 0; }
+.agent-completion-icon { font-size: 1rem; font-weight: 700; }
+.agent-completion-toast button { padding: 0 .15rem; line-height: 1.2; }
 [data-agent-open="true"] .undo-toast { bottom: 16rem; }
 .agent-setup-hint { display: flex; gap: 1rem; align-items: center; justify-content: space-between; padding: .8rem 1rem; margin-bottom: .7rem; background: var(--color-subtle-bg); border-radius: .6rem; font-size: .88rem; }
 .agent-setup-hint button { flex-shrink: 0; }
@@ -3377,6 +3383,54 @@ select:focus-visible {
 .planning-draft-change-details { flex-basis: 100%; margin-top: .5rem; color: var(--color-muted); font-size: .8rem; }
 .planning-draft-change-details summary { cursor: pointer; padding: .3rem 0; }
 .planning-draft-changes { max-height: 12rem; overflow-y: auto; }
+.planning-view-switch { display: flex; gap: .35rem; margin-bottom: 1.1rem; }
+.planning-view-switch button { border: 1px solid transparent; border-radius: .55rem; padding: .45rem .8rem; background: transparent; color: var(--color-muted); font: inherit; font-size: .85rem; cursor: pointer; }
+.planning-view-switch button[aria-pressed="true"] { background: var(--surface-raised); color: var(--color-link); border-color: var(--border-default); }
+.planning-focus-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: .85rem; }
+.planning-focus-heading h2 { margin: 0; font-size: 1rem; font-weight: 600; }
+.planning-focus-empty { padding: 1rem; border: 1px dashed var(--border-default); border-radius: .8rem; }
+.planning-focus-empty p { color: var(--color-muted); margin-top: 0; line-height: 1.7; }
+.planning-focus-empty button + button { margin-left: .8rem; }
+.planning-focus-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 19rem), 1fr)); gap: .9rem; }
+.planning-focus a { color: var(--color-link); }
+.planning-focus { color: var(--color-page-ink); }
+.planning-focus .linkish { color: var(--color-link); }
+.planning-focus-card { padding: 1.1rem; border: 1px solid var(--border-default); border-radius: 1rem; background: var(--surface-raised); min-width: 0; overflow-wrap: anywhere; }
+.planning-focus-card header a { display: block; font-size: 1.05rem; font-weight: 600; text-decoration: none; }
+.planning-focus-card header small { display: block; margin-top: .25rem; color: var(--color-muted); }
+.planning-focus-stage { margin: 1rem 0; }
+.planning-focus-stage > span, .planning-focus-next > span { display: block; margin-bottom: .3rem; font-size: .74rem; color: var(--color-muted); }
+.planning-focus-stage strong, .planning-focus-next strong { display: block; font-size: .9rem; line-height: 1.6; }
+.planning-focus-stage p, .planning-focus-next p { font-size: .84rem; line-height: 1.65; color: var(--color-muted); margin: .4rem 0; white-space: pre-wrap; }
+.planning-focus-next { padding-top: .8rem; border-top: 1px solid var(--border-subtle); }
+.planning-focus-next > small { display: block; margin-top: .25rem; color: var(--color-muted); }
+.planning-focus-controls { display: flex; flex-wrap: wrap; align-items: center; gap: .7rem; margin-top: .85rem; font-size: .8rem; }
+.planning-focus-options { display: grid; gap: .5rem; max-height: 50vh; overflow-y: auto; margin: 1rem 0; }
+.planning-focus-options label { display: flex; align-items: flex-start; gap: .65rem; padding: .65rem; border-radius: .5rem; background: var(--surface-subtle); color: var(--color-page-ink); }
+.planning-focus-options input { flex: none; margin-top: .3rem; }
+.planning-focus-options span { min-width: 0; overflow-wrap: anywhere; }
+.planning-focus-options small { display: block; color: var(--color-muted); }
+.planning-next-picker { list-style: none; padding: 0; display: grid; gap: .6rem; max-height: 50vh; overflow-y: auto; }
+.planning-next-picker button { width: 100%; text-align: left; overflow-wrap: anywhere; white-space: normal; }
+.planning-next-picker strong, .planning-next-picker small { display: block; }
+.planning-next-picker small { color: var(--color-muted); margin-top: .3rem; }
+.planning-draft-change-details { grid-column: 1 / -1; min-width: 0; }
+.planning-review-list { max-height: 32rem; overflow-y: auto; display: grid; gap: .8rem; padding: .3rem .15rem; }
+.planning-review-change { padding: .8rem; border: 1px solid var(--border-subtle); border-radius: .6rem; background: var(--surface-raised); min-width: 0; color: var(--color-page-ink); }
+.planning-review-change h3 { margin: 0 0 .7rem; font-size: .85rem; overflow-wrap: anywhere; }
+.planning-review-change h3 span { color: var(--color-link); font-size: .75rem; }
+.planning-review-change.removed h3 span { color: var(--color-danger-ink); }
+.planning-review-change dl { margin: 0; }
+.planning-review-field { display: grid; grid-template-columns: 6rem minmax(0, 1fr) minmax(0, 1fr); gap: .75rem; padding: .6rem 0; border-top: 1px solid var(--border-subtle); }
+.planning-review-field dt { font-size: .8rem; color: var(--color-muted); }
+.planning-review-field dd { margin: 0; min-width: 0; }
+.planning-review-field small { display: block; color: var(--color-muted); font-size: .7rem; }
+.planning-review-field dd p { margin: .25rem 0 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--color-page-ink); line-height: 1.65; }
+@media (max-width: 650px) {
+  .planning-review-field { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: .4rem .7rem; }
+  .planning-review-field dt { grid-column: 1 / -1; }
+  .planning-focus-card { padding: .9rem; }
+}
 .roadmap-heading h1, .roadmap-heading h2 { overflow-wrap: anywhere; }
 
 .assistant-process-setting { display: flex; align-items: center; gap: .6rem; cursor: pointer; }

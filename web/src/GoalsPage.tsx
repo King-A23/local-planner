@@ -31,6 +31,8 @@ import {
 } from "./api";
 import { ItemMenu, type ItemAction } from "./ItemActions";
 import { Modal } from "./Modal";
+import { PlanningChanges } from "./PlanningChanges";
+import { PlanningFocus } from "./PlanningFocus";
 import { ComposerKeyboard } from "./composerKeyboard";
 import { openItemEditor } from "./ItemEditor";
 import { goalPath, visibleGoalIds, nextGoalAction } from "./planningView";
@@ -174,21 +176,7 @@ function DraftBanner({
         )}
       </div>
       {draft.status === "editing" && draft.changes?.length ? (
-        <details className="planning-draft-change-details"><summary>查看变更明细</summary><div className="planning-draft-changes">
-          {draft.changes.map((c) => (
-            <span
-              className={`draft-change ${c.type}`}
-              key={`${c.kind}-${c.id}`}
-            >
-              {c.type === "added"
-                ? "新增"
-                : c.type === "removed"
-                  ? "移除"
-                  : "调整"}{" "}
-              · {c.title}
-            </span>
-          ))}
-        </div></details>
+        <PlanningChanges changes={draft.changes} />
       ) : null}
       {error && <p className="error">{error}</p>}
     </aside>
@@ -292,6 +280,7 @@ export function GoalsPage({
   const [draft, setDraft] = useState<PlanningDraft | null>(null);
   const [previewId, setPreviewId] = useState<string | null>(null);
   const [previewPhaseId, setPreviewPhaseId] = useState<string | null>(null);
+  const [view, setView] = useState<"focus" | "map">("focus");
   const [busy, setBusy] = useState(false);
   const load = async () => {
     const value = await listGoals();
@@ -450,7 +439,15 @@ export function GoalsPage({
           <p>新建目标，或用助手描述你的方向。</p>
         </section>
       )}
-      {shown.length > 0 && !preview && (
+      {data && shown.length > 0 && draft?.status !== "editing" && <>
+        <div className="planning-view-switch" role="group" aria-label="规划视图">
+          <button aria-pressed={view === "focus"} onClick={() => setView("focus")}>当前重点</button>
+          <button aria-pressed={view === "map"} onClick={() => setView("map")}>目标地图</button>
+        </div>
+        {view === "focus" && <PlanningFocus goals={data.items} today={data.serverToday} recoveryGeneration={data.recoveryGeneration}
+          onMap={() => setView("map")} onChanged={async () => { await load(); onChange?.(); }} />}
+      </>}
+      {shown.length > 0 && !preview && (draft?.status === "editing" || view === "map") && (
         <GoalMap
           goals={shown}
           changes={draft?.status === "editing" ? draft.changes : undefined}
